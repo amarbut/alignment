@@ -1,13 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Sep 18 17:37:51 2025
+Activation capture (incremental, last-k steps) — simplified/robust overhaul
 
-@author: anna
+Key changes vs your previous version:
+- Removed teacher-forced capture path entirely.
+- Removed attention-implementation branches (Flash/SDPA logic etc.).
+- Simplified model layer discovery to a small lookup table for our target models
+  (LLaMA-3.1 8B base+instruct, GPT-OSS-20B, Mixtral-8x7B-Instruct) with a
+  conservative fallback.
+- Added reliable chat-templating for instruct models (opt-in via --chat_template
+  or auto-enabled when model_id suggests "instruct").
+- Fixed incremental-attention mask shape when using past_kv.
+- Added on-disk saving of activations + metadata (--save_dir). We store
+  a single NPZ named run_{timestamp}.npz with arrays:
+    * activations: float32 array [S, L, H] (S = kept decoding steps, L = #layers)
+      If some layers were not captured, we pad with NaNs.
+    * layer_indices: int32 [L]
+    * generated_ids: int32 [S]
+    * input_ids: int32 [prompt_len]
+      Plus a JSON sidecar with metadata.
+- BOS/EOS/PAD safety wiring for LLaMA-3(.1), without growing vocab.
+
+Usage (examples):
+  python activation_grab_flex_overhaul.py \
+    --model_id meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --prompt "Why is the sky blue?" \
+    --last_k 5 --save_dir ./caps_llama31_instruct --chat_template true
+
+  python activation_grab_flex_overhaul.py \
+    --model_id mistralai/Mixtral-8x7B-Instruct-v0.1 \
+    --prompt "Explain diffusion models at a high level." \
+    --last_k 5 --save_dir ./caps_mixtral --chat_template true
+
+  python activation_grab_flex_overhaul.py \
+    --model_id cognitivecomputations/dolphin-2.9-llama3-8b \
+    --prompt "Summarize the CMB" --last_k 5 --save_dir ./caps_gptoss
 """
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import os
 import re
 import json
@@ -118,11 +148,11 @@ def load_model_and_tokenizer(
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.eos_token_id
 
-    # Diagnostics for OOB debugging
-    # emb_rows = model.get_input_embeddings().num_embeddings
-    # print("[diag:model] emb_rows:", emb_rows)
-    # print("[diag:tok] len(tokenizer):", len(tokenizer), "vocab_size:", tokenizer.vocab_size)
-    # print("[diag:tok] bos/eos/pad:", tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id)
+    # Diagnostics
+    emb_rows = model.get_input_embeddings().num_embeddings
+    print("[diag:model] emb_rows:", emb_rows)
+    print("[diag:tok] len(tokenizer):", len(tokenizer), "vocab_size:", tokenizer.vocab_size)
+    print("[diag:tok] bos/eos/pad:", tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id)
 
     return tokenizer, model
 
@@ -191,11 +221,10 @@ def apply_chat_template_if_needed(tokenizer, prompt: str, chat_template: bool, m
     return prompt
 
 
-def build_attn_mask_for_past(step_len: int, past_kv: Any, device) -> torch.Tensor:
-    """Create a 1D attention mask of length past_len + step_len (usually step_len==1)."""
+def build_attn_mask_for_past(step_len: int, past_kv: Any, device) -> tuple[torch.Tensor, int]:
+    """Return (attention_mask, past_len). 1D mask length = past_len + step_len."""
     if past_kv is None:
-        return torch.ones((1, step_len), device=device)
-    # Each past tuple: (k, v) with shape [B, n_heads, past_len, head_dim]
+        return torch.ones((1, step_len), device=device), 0
     try:
         if isinstance(past_kv, (list, tuple)) and len(past_kv) > 0:
             past_len = past_kv[0][0].shape[-2]
@@ -204,7 +233,7 @@ def build_attn_mask_for_past(step_len: int, past_kv: Any, device) -> torch.Tenso
     except Exception:
         past_len = 0
     total = past_len + step_len
-    return torch.ones((1, total), device=device)
+    return torch.ones((1, total), device=device), past_len
 
 
 def generate_and_capture_last_k(
@@ -262,7 +291,9 @@ def generate_and_capture_last_k(
                 next_id = torch.argmax(next_logits, dim=-1, keepdim=True)
 
             step_ids = next_id  # [1,1]
-            attn_mask = build_attn_mask_for_past(step_len=1, past_kv=past_kv, device=device)
+            attn_mask, past_len = build_attn_mask_for_past(step_len=1, past_kv=past_kv, device=device)
+            # Crucial for correct decoding with KV cache: advance positional ids.
+            position_ids = torch.tensor([[past_len]], device=device, dtype=torch.long)
 
             rc.start_step()
             with torch.no_grad():
@@ -270,6 +301,7 @@ def generate_and_capture_last_k(
                     input_ids=step_ids,
                     attention_mask=attn_mask,
                     past_key_values=past_kv,
+                    position_ids=position_ids,
                     use_cache=True,
                 )
             rc.end_step()
