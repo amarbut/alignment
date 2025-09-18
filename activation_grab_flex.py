@@ -98,6 +98,13 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(model_id_or_path, **kwargs)
     model.eval()
+    
+    print("pre pad token addition")
+    print("[diag:model] emb_rows:", model.get_input_embeddings().num_embeddings)
+    print("[diag:tok] len(tokenizer):", len(tokenizer), "vocab_size:", tokenizer.vocab_size)
+    print("[diag:tok] bos/eos/pad:",
+      tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id)
+
 
     # Ensure we have a pad token if needed (for teacher-forced masks)
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
