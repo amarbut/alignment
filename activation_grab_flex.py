@@ -88,6 +88,9 @@ def load_model_and_tokenizer(
         raise ValueError("quant must be '4bit', '8bit', or 'none'")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id_or_path, use_fast=True, trust_remote_code=trust_remote_code)
+    
+    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+       tokenizer.pad_token = tokenizer.eos_token
 
     kwargs = dict(
         quantization_config=bnb_config,
