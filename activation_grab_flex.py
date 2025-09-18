@@ -98,22 +98,13 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(model_id_or_path, **kwargs)
     model.eval()
-    
-    print("pre pad token addition")
-    print("[diag:model] emb_rows:", model.get_input_embeddings().num_embeddings)
-    print("[diag:tok] len(tokenizer):", len(tokenizer), "vocab_size:", tokenizer.vocab_size)
-    print("[diag:tok] bos/eos/pad:",
-      tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id)
+
 
 
     # Ensure we have a pad token if needed (for teacher-forced masks)
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
         tokenizer.pad_token = tokenizer.eos_token
-        
-    print("[diag:model] emb_rows:", model.get_input_embeddings().num_embeddings)
-    print("[diag:tok] len(tokenizer):", len(tokenizer), "vocab_size:", tokenizer.vocab_size)
-    print("[diag:tok] bos/eos/pad:",
-      tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id)
+
 
 
     return tokenizer, model
@@ -249,14 +240,15 @@ def generate_and_capture_last_k(
     input_ids = inputs["input_ids"]
     attn = inputs.get("attention_mask", None)
 
-    emb = model.get_input_embeddings()
-    vocab_n = emb.num_embeddings
-    ids_cpu = input_ids.detach().to("cpu")
-    bad = (ids_cpu < 0) | (ids_cpu >= vocab_n)
-    print(f"[diag] vocab size: {vocab_n}, min id: {int(ids_cpu.min())}, max id: {int(ids_cpu.max())}")
-    if bad.any():
-        bad_pos = torch.nonzero(bad, as_tuple=False)[:10]
-        raise RuntimeError(f"Out-of-bound token ids at positions {bad_pos.tolist()}")
+    # debugging OOB errors
+    # emb = model.get_input_embeddings()
+    # vocab_n = emb.num_embeddings
+    # ids_cpu = input_ids.detach().to("cpu")
+    # bad = (ids_cpu < 0) | (ids_cpu >= vocab_n)
+    # print(f"[diag] vocab size: {vocab_n}, min id: {int(ids_cpu.min())}, max id: {int(ids_cpu.max())}")
+    # if bad.any():
+    #     bad_pos = torch.nonzero(bad, as_tuple=False)[:10]
+    #     raise RuntimeError(f"Out-of-bound token ids at positions {bad_pos.tolist()}")
 
     with torch.no_grad():
         out = model(input_ids=input_ids, attention_mask=attn, use_cache=True)
