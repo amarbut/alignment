@@ -88,9 +88,6 @@ def load_model_and_tokenizer(
         raise ValueError("quant must be '4bit', '8bit', or 'none'")
 
     tokenizer = AutoTokenizer.from_pretrained(model_id_or_path, use_fast=True, trust_remote_code=trust_remote_code)
-    
-    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-       tokenizer.pad_token = tokenizer.eos_token
 
     kwargs = dict(
         quantization_config=bnb_config,
@@ -235,9 +232,18 @@ def generate_and_capture_last_k(
     Returns (text, captures_list)
     """
     device = model.device
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)    
     input_ids = inputs["input_ids"]
     attn = inputs.get("attention_mask", None)
+
+    emb = model.get_input_embeddings()
+    vocab_n = emb.num_embeddings
+    ids_cpu = input_ids.detach().to("cpu")
+    bad = (ids_cpu < 0) | (ids_cpu >= vocab_n)
+    print(f"[diag] vocab size: {vocab_n}, min id: {int(ids_cpu.min())}, max id: {int(ids_cpu.max())}")
+    if bad.any():
+        bad_pos = torch.nonzero(bad, as_tuple=False)[:10]
+        raise RuntimeError(f"Out-of-bound token ids at positions {bad_pos.tolist()}")
 
     with torch.no_grad():
         out = model(input_ids=input_ids, attention_mask=attn, use_cache=True)
