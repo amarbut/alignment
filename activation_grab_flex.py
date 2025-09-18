@@ -328,7 +328,6 @@ def main():
                    help="HF repo id or local path (e.g., meta-llama/Meta-Llama-3.1-8B-Instruct)")
     p.add_argument("--quant", type=str, default="4bit", choices=["4bit", "8bit", "none"])
     p.add_argument("--compute_dtype", type=str, default="bf16", choices=["bf16", "fp16"])
-    p.add_argument("--attn_impl", type=str, default=None, help="e.g., flash_attention_2")
     p.add_argument("--device_map", type=str, default="auto")
     p.add_argument("--trust_remote_code", type=str2bool, default=False)
 
@@ -352,7 +351,6 @@ def main():
         model_id_or_path=args.model_id,
         quant=args.quant,
         compute_dtype=args.compute_dtype,
-        attn_impl=args.attn_impl,
         device_map=args.device_map,
         trust_remote_code=args.trust_remote_code,
     )
