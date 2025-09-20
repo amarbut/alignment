@@ -110,18 +110,15 @@ if __name__ == "__main__":
     model, tokenizer = load_model_tokenizer(args.model_id, args.quant, args.dtype)
     
     #hardcoded settings for candidate models
-    model_lookup = {'meta-llama/Meta-Llama-3.1-8B':{'prompt_format':'base',
-                                                    'decoder_loc':model.model.layers,},
-                    'meta-llama/Meta-Llama-3.1-8B-Instruct':{'prompt_format':'chat',
-                                                             'decoder_loc':model.model.layers,},
-                    'openai/gpt-oss-20b':{'prompt_format':'base',
-                                          'decoder_loc':model.transformer.h,},
-                    'mistralai/Mixtral-8x7B-Instruct-v0.1':{'prompt_format':'chat',
-                                                            'decoder_loc':model.model.layers,}
-                    }
-    
-    prompt_format = model_lookup[args.model_id]['prompt_format']
-    decoder_loc = model_lookup[args.model_id]['decoder_loc']
+    if "instruct" in args.model_id.lower():
+        prompt_format = "chat"
+    else:
+        prompt_format = "base"
+        
+    if "openai" in args.model_id.lower():
+        decoder_loc = model.transformer.h
+    else:
+        dedoder_loc = model.model.layers
     
     #build out prompt
     prompt_text = build_prompt(prompt_format, args.prompt, tokenizer)
