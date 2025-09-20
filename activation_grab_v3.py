@@ -13,9 +13,14 @@ def load_model_tokenizer(model_id, quant, compute_dtype):
         dtype = torch.bfloat16
     elif compute_dtype.lower() == "fp16":
         dtype = torch.float16
-    
-    bnb_config = None
-    if 'openai' not in model_id:
+
+    if 'openai' in model_id:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,       
+            device_map="auto",
+        )
+    else:
         if quant.lower() == "4bit":
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -25,17 +30,15 @@ def load_model_tokenizer(model_id, quant, compute_dtype):
             )
         elif quant.lower() == "8bit":
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-        elif quant.lower() == "none":
-            bnb_config = None
-        else:
-            raise ValueError("quant must be '4bit', '8bit', or 'none'")
         
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        quantization_config=bnb_config,        
-        device_map="auto",
-    )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            quantization_config=bnb_config,        
+            device_map="auto",
+        )
+        
+    
     model.eval()
     
     return model, tokenizer
