@@ -125,10 +125,7 @@ if __name__ == "__main__":
     else:
         prompt_format = "base"
         
-    if "openai" in args.model_id.lower():
-        decoder_loc = model.transformer.h
-    else:
-        decoder_loc = model.model.layers
+    decoder_loc = model.model.layers
     
     #build out prompt
     prompt_text = build_prompt(prompt_format, args.prompt, tokenizer)
