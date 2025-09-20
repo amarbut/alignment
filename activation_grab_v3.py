@@ -107,7 +107,7 @@ if __name__ == "__main__":
 
     
     #load model & tokenizer
-    model, tokenizer = load_model_tokenizer(args['model_id'], args['quant'], args['dtype'])
+    model, tokenizer = load_model_tokenizer(args.model_id, args.quant, args.dtype)
     
     #hardcoded settings for candidate models
     model_lookup = {'meta-llama/Meta-Llama-3.1-8B':{'prompt_format':'base',
@@ -120,19 +120,18 @@ if __name__ == "__main__":
                                                             'decoder_loc':model.model.layers,}
                     }
     
-    prompt_format = model_lookup[args['model_id']]['prompt_format']
-    decoder_loc = model_lookup[args['model_id']]['decoder_loc']
+    prompt_format = model_lookup[args.model_id]['prompt_format']
+    decoder_loc = model_lookup[args.model_id]['decoder_loc']
     
     #build out prompt
-    prompt_text = build_prompt(prompt_format, argparse['prompt'], tokenizer)
+    prompt_text = build_prompt(prompt_format, args.prompt, tokenizer)
     
-    layers, captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k=args['last_k'], max_new_tokens=args['max_new_tokens'], temperature=args['temperature'], top_p=args['top_p'])
-
+    layers, captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k=args.last_k, max_new_tokens=args.max_new_tokens, temperature=args.temperature, top_p=args.top_p)
 
     # ---- tiny summary print
     L = len(layers)
     H = next(iter(captures.values())).shape[-1] if captures else 0
-    print(f"\n[activations] layers captured: {len(captures)}/{L}; each is shape [{args['last_k']}, {H}]")
+    print(f"\n[activations] layers captured: {len(captures)}/{L}; each is shape [{args.last_k}, {H}]")
     # example: show layer 0 first row norm
     if captures:
         ex = captures[0][0]
