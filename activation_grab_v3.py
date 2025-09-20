@@ -7,7 +7,13 @@ import argparse
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
-def load_model_tokenizer(model_id, quant, dtype):
+def load_model_tokenizer(model_id, quant, compute_dtype):
+    
+    if compute_dtype.lower() == "bf16":
+        dtype = torch.bfloat16
+    elif compute_dtype.lower() == "fp16":
+        dtype = torch.float16
+    
     bnb_config = None
     if quant.lower() == "4bit":
         bnb_config = BitsAndBytesConfig(
