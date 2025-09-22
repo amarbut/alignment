@@ -142,7 +142,7 @@ def load_refusal(model_id):
 
 def refusal_sim(captures, refusal_meta, refusal_dir, last_k):
     # Compute cosine similarity with refusal direction @ correct pos and layer
-    vec = captures[last_k - refusal_meta["pos"]][refusal_meta["layer"]] # assuming that the "pos" metadata is indexed from the end (i.e. -5 is 5 tokens from the eos) and last_k is not smaller than "pos"
+    vec = captures[last_k + refusal_meta["pos"]][refusal_meta["layer"]] # assuming that the "pos" metadata is indexed from the end (i.e. -5 is 5 tokens from the eos) and last_k is not smaller than "pos"
     v = vec.to(torch.float32)
     d = refusal_dir.to(v.device, dtype=torch.float32)
     sim = F.cosine_similarity(v.unsqueeze(0), d.unsqueeze(0))
