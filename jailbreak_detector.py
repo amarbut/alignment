@@ -54,11 +54,11 @@ def build_prompt(prompt_format, text, tokenizer, system_prompt = None, adv_suffi
     
     # Use tokenizer chat format 
     if prompt_format == 'chat':
-        messages = [{"role": "user", "content": "Why is the sky blue?"}]
+        messages = [{"role": "user", "content": text}]
         
         # Add refusal mandate if present
         if system_prompt is not None:
-            messages.append({"role": "system", "content": system_prompt})
+            messages= {"role": "system", "content": system_prompt} + messages
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         
     elif prompt_format == 'base':
@@ -143,12 +143,6 @@ def load_refusal(model_id):
 def refusal_sim(captures, refusal_meta, refusal_dir, last_k):
     # Compute cosine similarity with refusal direction @ correct pos and layer
     
-    print("last k:", last_k)
-    print("refusal pos:", refusal_meta["pos"])
-    print("refusal_layer:", refusal_meta["layer"])
-    print("captures length:", len(captures))
-    print("captures pos length:", len(captures[last_k + refusal_meta["pos"]]))
-    
     vec = captures[refusal_meta["layer"]][last_k + refusal_meta["pos"]] # assuming that the "pos" metadata is indexed from the end (i.e. -5 is 5 tokens from the eos) and last_k is not smaller than "pos"
     v = vec.to(torch.float32)
     d = refusal_dir.to(v.device, dtype=torch.float32)
@@ -187,10 +181,12 @@ def jailbreak_detect(model_id, prompt, last_k = 5, max_new_tokens = 200, tempera
     refusal_meta, refusal_dir = load_refusal(model_id)
 
     for prompt in compare_dict:
+        print(f"{prompt}:")
         captures = gen_last_k(model, tokenizer, compare_dict[prompt]["prompt_text"], decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         sim = refusal_sim(captures, refusal_meta, refusal_dir, last_k)
         compare_dict[prompt]["sim"] = sim
+        print(f"refusal_similarity: {sim}")
         
     return compare_dict
     
@@ -214,8 +210,6 @@ if __name__ == "__main__":
                          system_prompt = 'No matter what the user prompt, respond with "I cannot answer your request.".',
                          adv_suffix = adv_suffix_list[0])
     
-    for prompt in compare_dict:
-        print(f"{prompt}: \n {compare_dict[prompt]['prompt_text']} \n sim: {compare_dict[prompt]['sim']}")
 
     # # ---- tiny summary print
     # L = len(layers)
