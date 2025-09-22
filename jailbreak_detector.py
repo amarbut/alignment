@@ -109,7 +109,7 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
             def hook(_mod, inputs):
                 # inputs[0] is residual stream into the block: [B, T, H]
                 hs = inputs[0]  # [1, T, H]
-                hs_lastk = hs[:, -last_k:, :].detach().to("cpu").float().squeeze(0).numpy()  # [last_k, H]
+                hs_lastk = hs[:, -last_k:, :].detach().to("cpu").float().squeeze(0)#.numpy() leave as tensor  # [last_k, H]
                 captures[ii] = hs_lastk
             return hook
         hooks.append(layer.register_forward_pre_hook(make_hook(i), with_kwargs=False))
