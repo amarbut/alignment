@@ -140,9 +140,9 @@ def load_refusal(model_id):
     
     return refusal_meta, refusal_dir
 
-def refusal_sim(captures, refusal_meta, refusal_dir):
+def refusal_sim(captures, refusal_meta, refusal_dir, last_k):
     # Compute cosine similarity with refusal direction @ correct pos and layer
-    vec = captures[refusal_meta["pos"]][refusal_meta["layer"]]
+    vec = captures[last_k - refusal_meta["pos"]][refusal_meta["layer"]] # assuming that the "pos" metadata is indexed from the end (i.e. -5 is 5 tokens from the eos) and last_k is not smaller than "pos"
     v = vec.to(torch.float32)
     d = refusal_dir.to(v.device, dtype=torch.float32)
     sim = F.cosine_similarity(v.unsqueeze(0), d.unsqueeze(0))
@@ -182,7 +182,7 @@ def jailbreak_detect(model_id, prompt, last_k = 5, max_new_tokens = 200, tempera
     for prompt in compare_dict:
         captures = gen_last_k(model, tokenizer, compare_dict[prompt]["prompt_text"], decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
-        sim = refusal_sim(captures, refusal_meta, refusal_dir)
+        sim = refusal_sim(captures, refusal_meta, refusal_dir, last_k)
         compare_dict[prompt]["sim"] = sim
         
     return compare_dict
