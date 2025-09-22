@@ -135,7 +135,7 @@ refusal_lookup = {# "meta-llama/Meta-Llama-3.1-8B":,
 
 def load_refusal(model_id):
     refusal_dir = torch.load(refusal_lookup[model_id]["direction"])
-    with js as open(refusal_lookup[model_id]["metadata"], "r"):
+    with open(refusal_lookup[model_id]["metadata"], "r") as js:
         refusal_meta = json.load(js)
     
     return refusal_meta, refusal_dir
