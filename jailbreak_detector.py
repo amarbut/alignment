@@ -58,7 +58,7 @@ def build_prompt(prompt_format, text, tokenizer, system_prompt = None, adv_suffi
         
         # Add refusal mandate if present
         if system_prompt is not None:
-            messages= {"role": "system", "content": system_prompt} + messages
+            messages= [{"role": "system", "content": system_prompt}] + messages
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         
     elif prompt_format == 'base':
