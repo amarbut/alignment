@@ -129,6 +129,9 @@ refusal_lookup = {# "meta-llama/Meta-Llama-3.1-8B":,
                   "meta-llama/Meta-Llama-3.1-8B-Instruct":
                       {"direction":"arditi_llama8bInstruct_direction.pt",
                        "metadata":"arditi_llama8bInstruct_metadata.json"},
+                  "meta-llama/Llama-2-7b-chat-hf":
+                      {"direction":"arditi_llama27bchathf_direction.pt",
+                       "metadata": "arditi_llama27bchathf_direction.json"}
                   # "openai/gpt-oss-20b":,
                   # "mistralai/Mixtral-8x7B-Instruct-v0.1"
                   }
@@ -164,7 +167,7 @@ def jailbreak_detect(model_id, prompt, last_k = 5, max_new_tokens = 200, tempera
     model, tokenizer = load_model_tokenizer(args.model_id, args.quant, args.dtype)
     
     #hardcoded settings for candidate models
-    if "instruct" in args.model_id.lower():
+    if "instruct" in args.model_id.lower() or "chat" in args.model_id.lower():
         prompt_format = "chat"
     else:
         prompt_format = "base"
