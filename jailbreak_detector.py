@@ -131,7 +131,7 @@ refusal_lookup = {# "meta-llama/Meta-Llama-3.1-8B":,
                        "metadata":"arditi_llama8bInstruct_metadata.json"},
                   "meta-llama/Llama-2-7b-chat-hf":
                       {"direction":"arditi_llama27bchathf_direction.pt",
-                       "metadata": "arditi_llama27bchathf_direction.json"}
+                       "metadata": "arditi_llama27bchathf_metadata.json"}
                   # "openai/gpt-oss-20b":,
                   # "mistralai/Mixtral-8x7B-Instruct-v0.1"
                   }
