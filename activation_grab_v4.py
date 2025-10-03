@@ -128,7 +128,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             with open(data_loc+"/harmless_train.json", "r") as hl_df:
                 hl_prompts = json.load(hl_df)
             
-            hl_sample = random.sample(hl_prompts, 1000)
+            hl_sample = random.sample(hl_prompts, min(len(hl_prompts,1000)))
             
             hl_acts = []
             hl_idx = 0
