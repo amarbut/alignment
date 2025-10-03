@@ -136,7 +136,8 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
                 hl_idx += 1
-                
+            
+            os.makedirs(f"{save_loc}/{model_id}/harmless_activations.pkl", exist_ok=True)
             with open(f"{save_loc}/{model_id}/harmless_activations.pkl", "wb") as hl_sf:
                 pickle.dump(hl_acts, hl_sf)
             
@@ -153,6 +154,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 hf_acts.append(captures)
                 hf_idx += 1
                 
+            os.makedirs(f"{save_loc}/{model_id}/harmful_activations.pkl", exist_ok=True)
             with open(f"{save_loc}/{model_id}/harmful_activations.pkl", "wb") as hf_sf:
                 pickle.dump(hf_acts, hf_sf)
         
@@ -160,6 +162,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
         captures = gen_last_k(model, tokenizer, prompt, decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         if save_loc:
+            os.makedirs(f"{save_loc}/{model_id}_activations.pkl", exist_ok=True)
             with open(f"{save_loc}/{model_id}_activations.pkl", "wb") as sf:
                 pickle.dump(hf_acts, sf)
                 
