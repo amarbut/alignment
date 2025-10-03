@@ -48,7 +48,7 @@ def load_model_tokenizer(model_id, quant, compute_dtype):
 
 def build_prompt(prompt_format, text, tokenizer):
     if prompt_format == 'chat':
-        messages = [{"role": "user", "content": "Why is the sky blue?"}]
+        messages = [{"role": "user", "content": text}]
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     elif prompt_format == 'base':
         prompt_text = text
