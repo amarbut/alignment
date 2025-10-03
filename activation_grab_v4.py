@@ -66,7 +66,7 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
             top_p=top_p,
         )
     text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    print(text)
+    #print(text)
 
     # ---- collect activations at each layer for the last 5 generated tokens
     prompt_len = inputs["input_ids"].shape[1]
@@ -126,10 +126,13 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 hl_prompts = json.load(hl_df)
             
             hl_acts = []
+            hl_idx = 0
             for p in hl_prompts:
+                print("Harmless prompt ", hl_idx)
                 prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
+                hl_idx += 1
                 
             with open(f"{save_loc}/{model_id}/harmless_activations.pkl", "wb") as hl_sf:
                 pickle.dump(hl_acts, hl_sf)
@@ -139,10 +142,13 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 hf_prompts = json.load(hf_df)
             
             hf_acts = []
+            hf_idx = 0
             for p in hf_prompts:
+                print("Harmful prompt ", hf_idx)
                 prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
-                hl_acts.append(captures)
+                hf_acts.append(captures)
+                hf_idx += 1
                 
             with open(f"{save_loc}/{model_id}/harmful_activations.pkl", "wb") as hf_sf:
                 pickle.dump(hf_acts, hf_sf)
