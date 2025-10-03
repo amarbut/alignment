@@ -157,7 +157,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 pickle.dump(hf_acts, hf_sf)
         
     else: #run on single prompt
-        captures = gen_last_k(model, tokenizer, compare_dict[prompt]["prompt_text"], decoder_loc, last_k, max_new_tokens, temperature, top_p)
+        captures = gen_last_k(model, tokenizer, prompt, decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         if save_loc:
             with open(f"{save_loc}/{model_id}_activations.pkl", "wb") as sf:
