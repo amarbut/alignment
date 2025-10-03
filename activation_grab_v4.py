@@ -6,6 +6,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import argparse
 import json
 import random
+import os
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
