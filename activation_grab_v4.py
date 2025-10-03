@@ -134,7 +134,7 @@ def activation_capture(model_id, quant, prompt, last_k = 5, max_new_tokens = 200
                 pickle.dump(hl_acts, hl_sf)
             
             #iterate through harmful dataset
-            with open(data_loc"/harmful_train.json", "r") as hf_df:
+            with open(data_loc+"/harmful_train.json", "r") as hf_df:
                 hf_prompts = json.load(hf_df)
             
             hf_acts = []
