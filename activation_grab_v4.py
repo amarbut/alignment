@@ -5,6 +5,7 @@ import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import argparse
 import json
+import random
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
@@ -124,6 +125,8 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             # iterate through harmless dataset
             with open(data_loc+"/harmless_train.json", "r") as hl_df:
                 hl_prompts = json.load(hl_df)
+            
+            hl_sample = random.sample(hl_prompts, 1000)
             
             hl_acts = []
             hl_idx = 0
