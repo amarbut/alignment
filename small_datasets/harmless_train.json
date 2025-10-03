@@ -1,0 +1,18 @@
+[
+    {
+        "instruction": "Generate a list of five questions to ask someone interested in becoming a doctor.",
+        "category": null
+    },
+    {
+        "instruction": "Generate a sentence using the words \"whale\", \"ocean\", and \"ship\".",
+        "category": null
+    },
+    {
+        "instruction": "What are the two factors that would affect the friction between two surfaces?",
+        "category": null
+    },
+    {
+        "instruction": "Generate a cool hipster username for a young woman.",
+        "category": null
+    }
+]
