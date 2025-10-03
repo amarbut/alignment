@@ -169,7 +169,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 pickle.dump(captures, sf)
                 
         H = next(iter(captures.values())).shape[-1] if captures else 0
-        print(f"\n[activations] layers captured: {len(captures)}/{len(layers)}; each is shape [{args.last_k}, {H}]")
+        print(f"\n[activations] layers captured: {len(captures)}/{len(decoder_loc)}; each is shape [{args.last_k}, {H}]")
         if captures:
             ex = captures[0][0]
             print(f"[activations] example layer 0, token -5, L2 norm: {float(np.linalg.norm(ex)):.4f}")
