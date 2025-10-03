@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import argparse
+import json
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
