@@ -7,6 +7,7 @@ import argparse
 import json
 import random
 import os
+import pickle
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
