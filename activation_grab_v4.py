@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import argparse
-import json
+import jsongit p
 
 # ---- load model/tokenizer (hardcoded for candidate models)
 
@@ -127,7 +127,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             
             hl_acts = []
             for p in hl_prompts:
-                prompt_text = build_prompt(prompt_format, p["instruction"])
+                prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
                 
@@ -140,7 +140,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             
             hf_acts = []
             for p in hf_prompts:
-                prompt_text = build_prompt(prompt_format, p["instruction"])
+                prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
                 
