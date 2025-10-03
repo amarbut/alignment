@@ -166,7 +166,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
         if save_loc:
             os.makedirs(f"{save_loc}/", exist_ok=True)
             with open(f"{save_loc}/{model_name}_activations.pkl", "wb") as sf:
-                pickle.dump(hf_acts, sf)
+                pickle.dump(capture, sf)
                 
         H = next(iter(captures.values())).shape[-1] if captures else 0
         print(f"\n[activations] layers captured: {len(captures)}/{L}; each is shape [{args.last_k}, {H}]")
