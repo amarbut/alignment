@@ -105,7 +105,7 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
     return captures
 
 def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_tokens = 200, temperature=0.7, top_p=0.9, save_loc=None, data_loc=None):
-
+    model_name = os.path.basename(model_id)
     #load model & tokenizer
     model, tokenizer = load_model_tokenizer(model_id, quant, dtype)
     
@@ -138,8 +138,8 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 hl_acts.append(captures)
                 hl_idx += 1
             
-            os.makedirs(f"{save_loc}/{model_id}/harmless_activations.pkl", exist_ok=True)
-            with open(f"{save_loc}/{model_id}/harmless_activations.pkl", "wb") as hl_sf:
+            os.makedirs(f"{save_loc}/{model_name}/", exist_ok=True)
+            with open(f"{save_loc}/{model_name}/harmless_activations.pkl", "wb") as hl_sf:
                 pickle.dump(hl_acts, hl_sf)
             
             #iterate through harmful dataset
@@ -155,16 +155,16 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 hf_acts.append(captures)
                 hf_idx += 1
                 
-            os.makedirs(f"{save_loc}/{model_id}/harmful_activations.pkl", exist_ok=True)
-            with open(f"{save_loc}/{model_id}/harmful_activations.pkl", "wb") as hf_sf:
+            os.makedirs(f"{save_loc}/{model_name}/", exist_ok=True)
+            with open(f"{save_loc}/{model_name}/harmful_activations.pkl", "wb") as hf_sf:
                 pickle.dump(hf_acts, hf_sf)
         
     else: #run on single prompt
         captures = gen_last_k(model, tokenizer, prompt, decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         if save_loc:
-            os.makedirs(f"{save_loc}/{model_id}_activations.pkl", exist_ok=True)
-            with open(f"{save_loc}/{model_id}_activations.pkl", "wb") as sf:
+            os.makedirs(f"{save_loc}/", exist_ok=True)
+            with open(f"{save_loc}/{model_name}_activations.pkl", "wb") as sf:
                 pickle.dump(hf_acts, sf)
                 
         H = next(iter(captures.values())).shape[-1] if captures else 0
