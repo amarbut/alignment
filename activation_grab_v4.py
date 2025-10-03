@@ -101,7 +101,7 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
             
     return captures
 
-def activation_capture(model_id, quant, prompt, last_k = 5, max_new_tokens = 200, temperature=0.7, top_p=0.9, save_loc=None, data_loc=None):
+def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_tokens = 200, temperature=0.7, top_p=0.9, save_loc=None, data_loc=None):
 
     #load model & tokenizer
     model, tokenizer = load_model_tokenizer(model_id, quant, dtype)
@@ -176,6 +176,6 @@ if __name__ == "__main__":
     
     args = p.parse_args()
     
-    activation_capture(args.model_id, args.quant, args.prompt, args.last_k, args.max_new_tokens, args.temperature, args.top_p, args.save_loc, args.data_loc)
+    activation_capture(args.model_id, args.quant, args.dtype, args.prompt, args.last_k, args.max_new_tokens, args.temperature, args.top_p, args.save_loc, args.data_loc)
 
 
