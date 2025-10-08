@@ -1,7 +1,7 @@
 {
   "prompts": {
-    "harmful_file": "/dataset/splits/harmful_val.json",
-    "harmless_file": "/dataset/splits/harmless_val.json"
+    "harmful_file": "dataset/splits/harmful_val.json",
+    "harmless_file": "dataset/splits/harmless_val.json"
   },
   "models": [
     {
