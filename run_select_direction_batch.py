@@ -74,6 +74,14 @@ select_direction.py (torch, jaxtyping, einops, etc.) and that your
 --loader-func returns a ready ModelBase (with tokenizer, refusal tokens, etc.).
 """
 
+# add arditi direction to path to simplify imports
+import sys
+from pathlib import Path
+
+# Adjust this to where you nested Arditi's repo
+ARDITI_ROOT = Path(__file__).resolve().parents[1] / "refusal_direction"
+sys.path.insert(0, str(ARDITI_ROOT))
+
 import argparse
 import importlib
 import json
