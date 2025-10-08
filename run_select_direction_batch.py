@@ -84,7 +84,7 @@ from typing import Callable, Dict, List, Tuple
 import torch
 
 # Import the selector from your attached file
-from select_direction import select_direction  # noqa
+from refusal_direction.pipeline.submodules.select_direction import select_direction  # noqa
 
 
 # ---------------------------
