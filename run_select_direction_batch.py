@@ -139,6 +139,8 @@ def main():
     ap.add_argument("--batch_size", type=int, default=32)
     args = ap.parse_args()
 
+    print(f"[debug] batch_size at runner={args.batch_size}")
+    
     cfg_path = Path(args.config)
     cfg = json.loads(cfg_path.read_text())
 

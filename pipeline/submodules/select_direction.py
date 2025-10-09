@@ -49,6 +49,8 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
     return refusal_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
+    
+    print(f"[debug] get_last_position_logits len={len(instructions)} bs={batch_size} num_batches={(len(instructions)+batch_size-1)//batch_size}")
     last_position_logits = None
 
     for i in range(0, len(instructions), batch_size):
@@ -125,6 +127,8 @@ def select_direction(
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
+   print(f"[debug] select_direction batch_size={batch_size}")
+    
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
 
