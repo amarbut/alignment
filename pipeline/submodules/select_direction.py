@@ -48,24 +48,33 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
 
     return refusal_scores
 
-def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
+def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, use_cache=False, max_new_tokens=0) -> Float[Tensor, "n_instructions d_vocab"]:
     
     print(f"[debug] get_last_position_logits len={len(instructions)} bs={batch_size} num_batches={(len(instructions)+batch_size-1)//batch_size}")
     last_position_logits = None
+    
+    model.eval()
+    with torch.inference_model():
 
-    for i in range(0, len(instructions), batch_size):
-        tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
-
-        with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            logits = model(
-                input_ids=tokenized_instructions.input_ids.to(model.device),
-                attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            ).logits
-
-        if last_position_logits is None:
-            last_position_logits = logits[:, -1, :]
-        else:
-            last_position_logits = torch.cat((last_position_logits, logits[:, -1, :]), dim=0)
+        for i in range(0, len(instructions), batch_size):
+            tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
+    
+            with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
+                logits = model(
+                    input_ids=tokenized_instructions.input_ids.to(model.device),
+                    attention_mask=tokenized_instructions.attention_mask.to(model.device),
+                use_cache=False).logits
+    
+            if last_position_logits is None:
+                last_position_logits = logits[:, -1, :].detach().to("cpu")
+            else:
+                last_position_logits = torch.cat((last_position_logits, logits[:, -1, :].detach().to("cpu")), dim=0)
+                
+            del logits
+            for k in tokenized_instructions:
+                tokenized_instructions[k].detach().to("cpu")
+            del tokenized_instructions
+            torch.cuda.empty_cache()
 
     return last_position_logits
 

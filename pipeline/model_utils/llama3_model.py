@@ -101,8 +101,9 @@ class Llama3Model(ModelBase):
             trust_remote_code=True,
             device_map="auto",
         ).eval()
-
+        model.config.use_cache = False
         model.requires_grad_(False) 
+        torch.set_grad_enabled(False)
 
         return model
 
