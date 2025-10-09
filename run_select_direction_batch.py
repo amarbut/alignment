@@ -114,60 +114,15 @@ def _import_callable(path: str) -> Callable:
 
 
 def _read_prompts(file_path: str) -> List[str]:
-    """
-    Read prompts from .txt (one per line), .jsonl (assumes top-level 'prompt' or 'text' field),
-    or .json (either a list[str], or dict with key 'prompts').
-    """
+
     p = Path(file_path)
     if not p.exists():
         raise FileNotFoundError(f"Prompts file not found: {file_path}")
 
-    suffix = p.suffix.lower()
-    prompts: List[str] = []
-
-    if suffix == ".txt":
-        with open(p, "r", encoding="utf-8") as f:
-            for line in f:
-                s = line.strip()
-                if s:
-                    prompts.append(s)
-        return prompts
-
-    if suffix == ".jsonl":
-        with open(p, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                obj = json.loads(line)
-                if isinstance(obj, dict):
-                    if "prompt" in obj:
-                        prompts.append(str(obj["prompt"]))
-                    elif "text" in obj:
-                        prompts.append(str(obj["text"]))
-                elif isinstance(obj, str):
-                    prompts.append(obj)
-        return prompts
-
-    if suffix == ".json":
-        with open(p, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        if isinstance(obj, list):
-            # assume list of strings or list of objects with "prompt"
-            for x in obj:
-                if isinstance(x, str):
-                    prompts.append(x)
-                elif isinstance(x, dict) and "prompt" in x:
-                    prompts.append(str(x["prompt"]))
-        elif isinstance(obj, dict):
-            if "prompts" in obj and isinstance(obj["prompts"], list):
-                for x in obj["prompts"]:
-                    if isinstance(x, str):
-                        prompts.append(x)
-                    elif isinstance(x, dict) and "prompt" in x:
-                        prompts.append(str(x["prompt"]))
-        return prompts
-
-    raise ValueError(f"Unsupported prompt file type: {suffix}")
+    with open(p, "r") as f:
+        dataset = [d["instruction"] for d in json.load(f)]
+    
+    return dataset
 
 
 # ---------------------------
