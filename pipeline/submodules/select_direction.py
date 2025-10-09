@@ -127,7 +127,7 @@ def select_direction(
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
-   print(f"[debug] select_direction batch_size={batch_size}")
+    print(f"[debug] select_direction batch_size={batch_size}")
     
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
