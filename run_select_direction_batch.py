@@ -133,10 +133,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, type=str, help="Path to JSON config (see header).")
     ap.add_argument("--loader-func", required=True, type=str, help="Import path 'module:callable' returning a ModelBase.")
-    ap.add_argument("--kl-threshold", type=float, default=0.1)
-    ap.add_argument("--induce-threshold", type=float, default=0.0)
-    ap.add_argument("--prune-layer-percentage", type=float, default=0.2)
-    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--kl_threshold", type=float, default=0.1)
+    ap.add_argument("--induce_threshold", type=float, default=0.0)
+    ap.add_argument("--prune_layer_percentage", type=float, default=0.2)
+    ap.add_argument("--batch_size", type=int, default=32)
     args = ap.parse_args()
 
     cfg_path = Path(args.config)
@@ -180,7 +180,7 @@ def main():
             kl_threshold=args.kl_threshold,
             induce_refusal_threshold=args.induce_threshold,
             prune_layer_percentage=args.prune_layer_percentage,
-            batch_size=args.batch-size,
+            batch_size=args.batch_size,
         )
 
         # Save artifacts
@@ -192,7 +192,7 @@ def main():
             "kl_threshold": args.kl_threshold,
             "induce_refusal_threshold": args.induce_threshold,
             "prune_layer_percentage": args.prune_layer_percentage,
-            "batch_size": args.batch-size,
+            "batch_size": args.batch_size,
             "candidate_shape": list(candidate_directions.shape),
         }
         (art_dir / "selected_meta.json").write_text(json.dumps(meta, indent=2))
