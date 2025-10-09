@@ -180,7 +180,7 @@ def main():
             kl_threshold=args.kl_threshold,
             induce_refusal_threshold=args.induce_threshold,
             prune_layer_percentage=args.prune_layer_percentage,
-            batch_size=args.batch_size,
+            batch_size=args.batch-size,
         )
 
         # Save artifacts
@@ -192,7 +192,7 @@ def main():
             "kl_threshold": args.kl_threshold,
             "induce_refusal_threshold": args.induce_threshold,
             "prune_layer_percentage": args.prune_layer_percentage,
-            "batch_size": args.batch_size,
+            "batch_size": args.batch-size,
             "candidate_shape": list(candidate_directions.shape),
         }
         (art_dir / "selected_meta.json").write_text(json.dumps(meta, indent=2))
