@@ -56,6 +56,7 @@ def get_last_position_logits(model, tokenizer, instructions, tokenize_instructio
     model.eval()
 
     for i in range(0, len(instructions), batch_size):
+        print(f"Instructions {i}/{len(instructions)")
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
@@ -148,6 +149,8 @@ def select_direction(
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     steering_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
+    
+    print("Collecting baseline_harmless_logits")
 
     baseline_harmless_logits = get_last_position_logits(
         model=model_base.model,
@@ -166,6 +169,8 @@ def select_direction(
             fwd_pre_hooks = [(model_base.model_block_modules[layer], get_direction_ablation_input_pre_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks = [(model_base.model_attn_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
+            
+            print("Collecting intervention logits")
 
             intervention_logits: Float[Tensor, "n_instructions 1 d_vocab"] = get_last_position_logits(
                 model=model_base.model,
@@ -176,6 +181,8 @@ def select_direction(
                 fwd_hooks=fwd_hooks,
                 batch_size=batch_size
             )
+            
+            print("Calculating kl-div")
 
             ablation_kl_div_scores[source_pos, source_layer] = kl_div_fn(baseline_harmless_logits, intervention_logits, mask=None).mean(dim=0).item()
 
