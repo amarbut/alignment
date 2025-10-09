@@ -132,7 +132,7 @@ def _read_prompts(file_path: str) -> List[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, type=str, help="Path to JSON config (see header).")
-    ap.add_argument("--loader-func", required=True, type=str, help="Import path 'module:callable' returning a ModelBase.")
+    ap.add_argument("--loader_func", required=True, type=str, help="Import path 'module:callable' returning a ModelBase.")
     ap.add_argument("--kl_threshold", type=float, default=0.1)
     ap.add_argument("--induce_threshold", type=float, default=0.0)
     ap.add_argument("--prune_layer_percentage", type=float, default=0.2)
