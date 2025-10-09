@@ -56,7 +56,7 @@ def get_last_position_logits(model, tokenizer, instructions, tokenize_instructio
     model.eval()
 
     for i in range(0, len(instructions), batch_size):
-        if i % 200 == 0:
+        if i % 240 == 0:
             print(f"Instructions {i}/{len(instructions)}")
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
