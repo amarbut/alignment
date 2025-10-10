@@ -6,7 +6,7 @@
   "models": [
     {
       "name": "meta-llama/Meta-Llama-3.1-8B",
-      "activations_dir": "candidate_dirs/Meta-Llama-3.1-8B",
+      "activations_dir": "candidate_dirs_flip/Meta-Llama-3.1-8B",
       "artifact_dir": "select_dirs/Meta-Llama-3.1-8B",
       "loader_kwargs": {
         "model_path": "meta-llama/Meta-Llama-3.1-8B"
@@ -14,7 +14,7 @@
     },
     {
       "name": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-      "activations_dir": "candidate_dirs/Meta-Llama-3.1-8B-Instruct",
+      "activations_dir": "candidate_dirs_flip/Meta-Llama-3.1-8B-Instruct",
       "artifact_dir": "select_dirs/Meta-Llama-3.1-8B-Instruct",
       "loader_kwargs": {
         "model_path": "meta-llama/Meta-Llama-3.1-8B-Instruct"
