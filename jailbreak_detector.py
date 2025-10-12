@@ -211,7 +211,7 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     
-    compare_dict = jailbreak_detect(args.model_id, args.quant, args.prompt, last_k = args.last_k, max_new_tokens = args.max_new_tokens, temperature = args.temperature, top_p=args.top_p, 
+    compare_dict = jailbreak_detect(args.model_id, args.quant, args.prompt, args.dtype, last_k = args.last_k, max_new_tokens = args.max_new_tokens, temperature = args.temperature, top_p=args.top_p, 
                          system_prompt = args.system_prompt,
                          adv_suffix = adv_suffix_list[args.adv_suffix])
     
