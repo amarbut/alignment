@@ -125,7 +125,8 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
 
 
 # Placeholder: try experiment with Arditi published direction first, then compute directions for other models
-refusal_lookup = {# "meta-llama/Meta-Llama-3.1-8B":,
+refusal_lookup = { "meta-llama/Meta-Llama-3.1-8B":{"direction":"arditi_llama8bInstruct_direction.pt",
+ "metadata":"arditi_llama8bInstruct_metadata.json"}, #placeholder--this isn't the right direction
                   "meta-llama/Meta-Llama-3.1-8B-Instruct":
                       {"direction":"arditi_llama8bInstruct_direction.pt",
                        "metadata":"arditi_llama8bInstruct_metadata.json"},
