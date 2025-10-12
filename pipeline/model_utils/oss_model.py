@@ -101,7 +101,7 @@ class OSSModel(ModelBase):
         return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode('<|return|>', add_special_tokens=False)
+        return self.tokenizer.encode('<|return|>', add_special_tokens=False)[-1]
 
     def _get_refusal_toks(self):
         return OSS_REFUSAL_TOKS

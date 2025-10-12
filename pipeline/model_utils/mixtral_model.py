@@ -102,7 +102,7 @@ class MixtralModel(ModelBase):
         return functools.partial(tokenize_instructions_mixtral_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode("</s>", add_special_tokens=False)
+        return self.tokenizer.encode("</s>", add_special_tokens=False)[-1]
 
     def _get_refusal_toks(self):
         return MIXTRAL_REFUSAL_TOKS
