@@ -101,7 +101,7 @@ class Llama3BaseModel(ModelBase):
         return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode(LLAMA3_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
+        return self.tokenizer.encode(self.tokenizer.eos_token()[-1])
 
     def _get_refusal_toks(self):
         return LLAMA3_REFUSAL_TOKS
