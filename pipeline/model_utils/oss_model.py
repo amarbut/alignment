@@ -98,7 +98,7 @@ class OSSModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         return self.tokenizer.encode('<|return|>', add_special_tokens=False)
@@ -116,7 +116,7 @@ class OSSModel(ModelBase):
         return torch.nn.ModuleList([block_module.mlp for block_module in self.model_block_modules])
 
     def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):
-        return functools.partial(orthogonalize_llama3_weights, direction=direction)
+        return functools.partial(orthogonalize_oss_weights, direction=direction)
     
     def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff, layer):
-        return functools.partial(act_add_llama3_weights, direction=direction, coeff=coeff, layer=layer)
+        return functools.partial(act_add_oss_weights, direction=direction, coeff=coeff, layer=layer)
