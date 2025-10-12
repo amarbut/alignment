@@ -24,9 +24,7 @@ def refusal_score(
     # we only care about the last tok position
     logits = logits[:, -1, :]
     print("nan in last logits?", torch.isnan(logits).any().item())
-    
-    top = logits.softmax(-1).topk(5).indices[0].tolist()
-    print("top tokens:", self.tokenizer.convert_ids_to_tokens(top))
+
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
