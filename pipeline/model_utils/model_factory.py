@@ -20,5 +20,8 @@ def construct_model_base(model_path: str) -> ModelBase:
     elif 'oss' in model_path.lower():
         from pipeline.model_utils.oss_model import OSSModel
         return OSSModel(model_path)
+    elif 'mixtral' in model_path.lower():
+        from pipeline.model_utils.mixtral_model import MixtralModel
+        return MixtralModel(model_path)
     else:
         raise ValueError(f"Unknown model family: {model_path}")

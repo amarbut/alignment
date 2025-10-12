@@ -28,7 +28,7 @@ LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 """
 
-LLAMA3_REFUSAL_TOKS = [40, 358, 19701, 68697, 33386, 14931, 2170, 1666, 439, 300] # 'I', ' I', 'Sorry', 'sorry', ' Sorry', ' sorry', 'As', ' As', 'as', ' as'
+LLAMA3_REFUSAL_TOKS = [40]#, 358, 19701, 68697, 33386, 14931, 2170, 1666, 439, 300] # 'I', ' I', 'Sorry', 'sorry', ' Sorry', ' sorry', 'As', ' As', 'as', ' as'
 
 def format_instruction_llama3_chat(
     instruction: str,
