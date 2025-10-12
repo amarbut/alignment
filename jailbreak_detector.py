@@ -132,7 +132,7 @@ refusal_lookup = { "meta-llama/Meta-Llama-3.1-8B":{"direction":"arditi_llama8bIn
                        "metadata":"arditi_llama8bInstruct_metadata.json"},
                   "meta-llama/Llama-2-7b-chat-hf":
                       {"direction":"arditi_llama27bchathf_direction.pt",
-                       "metadata": "arditi_llama27bchathf_metadata.json"}
+                       "metadata": "arditi_llama27bchathf_metadata.json"},
                   "openai/gpt-oss-20b":{"direction":"arditi_llama8bInstruct_direction.pt",
                    "metadata":"arditi_llama8bInstruct_metadata.json"}, #placeholder--this isn't the right direction,
                    "mistralai/Mixtral-8x7B-Instruct-v0.1":{"direction":"arditi_llama8bInstruct_direction.pt",
