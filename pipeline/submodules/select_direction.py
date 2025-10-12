@@ -51,14 +51,12 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, use_cache=False, max_new_tokens=0) -> Float[Tensor, "n_instructions d_vocab"]:
     
-    print(f"[debug] get_last_position_logits len={len(instructions)} bs={batch_size} num_batches={(len(instructions)+batch_size-1)//batch_size}")
+    
     last_position_logits = None
     
     model.eval()
 
     for i in range(0, len(instructions), batch_size):
-        if i % 240 == 0:
-            print(f"Instructions {i}/{len(instructions)}")
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
@@ -138,14 +136,15 @@ def select_direction(
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
-    print(f"[debug] select_direction batch_size={batch_size}")
     
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
 
     n_pos, n_layer, d_model = candidate_directions.shape
-
+    print(len(harmful_instructions))
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
+    
+    print("baseline_refusal_scores_harmful:", baseline_refusal_scores_harmful)
     baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
@@ -195,6 +194,8 @@ def select_direction(
             fwd_pre_hooks = [(model_base.model_block_modules[layer], get_direction_ablation_input_pre_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks = [(model_base.model_attn_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
+
+            print(len(harmful_instructions))            
 
             refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
             print("ablation_refusal_scores_pre_mean:", refusal_scores)
