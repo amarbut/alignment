@@ -188,7 +188,7 @@ def jailbreak_detect(model_id, quant, prompt, dtype, last_k = 5, max_new_tokens 
 
     for prompt in compare_dict:
         print(f"{prompt}:")
-         captures = gen_last_k(model, tokenizer, compare_dict[prompt]["prompt_text"], decoder_loc, last_k, max_new_tokens, temperature, top_p)
+        captures = gen_last_k(model, tokenizer, compare_dict[prompt]["prompt_text"], decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         # just comparing outputs of different models without actual directions
         # sim = refusal_sim(captures, refusal_meta, refusal_dir, last_k)
