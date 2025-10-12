@@ -18,7 +18,7 @@ def construct_model_base(model_path: str) -> ModelBase:
         from pipeline.model_utils.yi_model import YiModel
         return YiModel(model_path)
     elif 'oss' in model_path.lower():
-        from pipeline.model_utils.yi_model import OSSModel
+        from pipeline.model_utils.oss_model import OSSModel
         return OSSModel(model_path)
     else:
         raise ValueError(f"Unknown model family: {model_path}")
