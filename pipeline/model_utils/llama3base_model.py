@@ -73,7 +73,7 @@ def act_add_llama3_weights(model, direction: Float[Tensor, "d_model"], coeff, la
 
     model.model.layers[layer-1].mlp.down_proj.bias = torch.nn.Parameter(bias)
 
-class Llama3Model(ModelBase):
+class Llama3BaseModel(ModelBase):
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
 
