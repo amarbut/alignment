@@ -142,9 +142,13 @@ def run_pipeline(model_path):
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
+    print(f"pre-filter harmful train: {len(harmful_train)}")
+    print(f"pre-filter harmful val: {len(harmful_val)}")
     
     # Filter datasets based on refusal scores
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
+    print(f"post-filter harmful train: {len(harmful_train)}")
+    print(f"post-filter harmful val: {len(harmful_val)}")
 
     # 1. Generate candidate refusal directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
