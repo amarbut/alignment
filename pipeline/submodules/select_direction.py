@@ -141,8 +141,8 @@ def select_direction(
         os.makedirs(artifact_dir)
 
     n_pos, n_layer, d_model = candidate_directions.shape
-    print("harmful_length:" len(harmful_instructions))
-    print("harmless_length:" len(harmful_instructions))
+    print("harmful_length:", len(harmful_instructions))
+    print("harmless_length:", len(harmless_instructions))
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
     
     print("baseline_refusal_scores_harmful:", baseline_refusal_scores_harmful)
