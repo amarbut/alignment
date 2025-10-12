@@ -27,7 +27,10 @@ def refusal_score(
 
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
+    print("nan in last probs?", torch.isnan(probs).any().item())
     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+    
+    print("nan in refusals", torch.isnan(refusal_probs).any().item())
 
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
