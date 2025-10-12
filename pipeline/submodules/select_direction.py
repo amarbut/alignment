@@ -23,14 +23,11 @@ def refusal_score(
 
     # we only care about the last tok position
     logits = logits[:, -1, :]
-    #print("nan in last logits?", torch.isnan(logits).any().item())
 
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
-    #print("nan in last probs?", torch.isnan(probs).any().item())
     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
     
-    #print("nan in refusals", torch.isnan(refusal_probs).any().item())
 
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
@@ -50,7 +47,6 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
             ).logits
 
         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
-        print("refusal_scores:", refusal_scores)
     return refusal_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, use_cache=False, max_new_tokens=0) -> Float[Tensor, "n_instructions d_vocab"]:
@@ -201,6 +197,7 @@ def select_direction(
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
 
             refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            print("ablation_refusal_scores_pre_mean:", refusal_scores)
             ablation_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
             print("ablation_refusal_scores:", ablation_refusal_scores[source_pos, source_layer])
 
