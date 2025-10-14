@@ -50,7 +50,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                     attention_mask=tokenized_instructions.attention_mask.to(model.device),
                 ).logits
             
-            if print_response == True and i % 240 == 0:
+            if print_response == True and i == 0:
                 prompt_text = tokenized_instructions.to(model.device)
                 with torch.no_grad():
                     output_ids = model.generate(
