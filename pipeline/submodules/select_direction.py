@@ -50,7 +50,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                     attention_mask=tokenized_instructions.attention_mask.to(model.device),
                 ).logits
             
-            if print_response == True and i == 0:
+            if print_response == True:
                 prompt_text = tokenized_instructions.to(model.device)
                 with torch.no_grad():
                     output_ids = model.generate(
@@ -60,6 +60,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                         top_p=0.9,
                     )
                 text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+                print("-----------------------------NEW PROMPT-------------------------")
                 print(text)
     
             refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
@@ -110,7 +111,7 @@ def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructio
         del logits
         torch.cuda.empty_cache()
         
-        if print_response == True and i == 0:
+        if print_response == True:
             prompt_text = enc.to(model.device)
             with torch.no_grad():
                 output_ids = model.generate(
@@ -120,6 +121,7 @@ def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructio
                     top_p=0.9,
                 )
             text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            print("-----------------------------NEW PROMPT-------------------------")
             print(text)
         
     return scores
