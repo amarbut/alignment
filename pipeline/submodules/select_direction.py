@@ -4,6 +4,7 @@ import functools
 import math
 import matplotlib.pyplot as plt
 import os
+import re
 
 from typing import List, Optional
 from jaxtyping import Float, Int
