@@ -54,7 +54,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
             prompt_text = tokenizer(instructions[i], return_tensors="pt").to(model.device)
             with torch.no_grad():
                 output_ids = model.generate(
-                    **tokenized_instructions,
+                    **prompt_text,
                     max_new_tokens=512,
                     temperature=0.7,
                     top_p=0.9,
