@@ -123,6 +123,10 @@ class Llama3Model(ModelBase):
 
     def _get_refusal_toks(self):
         return LLAMA3_REFUSAL_TOKS
+    
+    def _get_refusal_phrases(self):
+        phrases = [" I’m sorry", " I'm sorry", " I cannot", " I can't", " As an AI", "I am unable", "I don't"]
+        return [self.tokenizer.encode(p, add_special_tokens=False) for p in phrases]
 
     def _get_model_block_modules(self):
         return self.model.model.layers

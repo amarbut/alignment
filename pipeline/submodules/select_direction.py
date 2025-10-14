@@ -253,7 +253,6 @@ def select_direction(
             fwd_hooks = [(model_base.model_attn_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             
-            print("Collecting intervention logits")
 
             intervention_logits: Float[Tensor, "n_instructions 1 d_vocab"] = get_last_position_logits(
                 model=model_base.model,
@@ -265,7 +264,6 @@ def select_direction(
                 batch_size=batch_size
             )
             
-            print("Calculating kl-div")
 
             ablation_kl_div_scores[source_pos, source_layer] = kl_div_fn(baseline_harmless_logits, intervention_logits, mask=None).mean(dim=0).item()
 
@@ -279,9 +277,7 @@ def select_direction(
        
 
             refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
-            #print("ablation_refusal_scores_pre_mean:", refusal_scores)
             ablation_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
-            #print("ablation_refusal_scores:", ablation_refusal_scores[source_pos, source_layer])
 
     for source_pos in range(-n_pos, 0):
         for source_layer in tqdm(range(n_layer), desc=f"Computing refusal addition for source position {source_pos}"):
