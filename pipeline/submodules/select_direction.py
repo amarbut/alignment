@@ -32,7 +32,7 @@ def refusal_score(
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+def get_refusal_scores(model, instructions, tokenizer, tokenize_instructions_fn, refusal_toks, phrase_ids = None, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, print_response = False):
     # if phrase_ids:
     #     return phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size)
     
@@ -50,15 +50,17 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits
         
-        with torch.no_grad():
-            output_ids = model.generate(
-                **tokenized_instructions,
-                max_new_tokens=512,
-                temperature=0.7,
-                top_p=0.9,
-            )
-        text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        print(text)
+        if print_response == True and i % 240 == 0:
+            prompt_text = tokenizer(instructions[i], return_tensors="pt").to(model.device)
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **tokenized_instructions,
+                    max_new_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                )
+            text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            print(text)
 
         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
         
