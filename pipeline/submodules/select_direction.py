@@ -112,7 +112,7 @@ def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructio
         torch.cuda.empty_cache()
         
         if print_response == True and i == 0:
-            prompt_text = tokenized_instructions.to(model.device)
+            prompt_text = enc.to(model.device)
             with torch.no_grad():
                 output_ids = model.generate(
                     **prompt_text,
