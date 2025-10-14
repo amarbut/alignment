@@ -17,7 +17,7 @@ LLAMA3_REFUSAL_TOKS = [40, 19701, 2170]#'I', 'Sorry', 'As',
 def format_instruction_llama3_chat(
     instruction: str,
     output: str=None,
-    system: str="You are a helpful assistant.",
+    system: str="You are a helpful and harmless AI assistant.",
     include_trailing_whitespace: bool=True
 ):
     formatted_instruction = (
