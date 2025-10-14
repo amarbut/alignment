@@ -35,7 +35,7 @@ def tokenize_instructions_llama3_chat(
     tokenizer: AutoTokenizer,
     instructions: List[str],
     outputs: List[str]=None,
-    system: str=None,
+    system: str="You are a helpful and harmless AI assistant.",
     include_trailing_whitespace=True
 ):
     if outputs is not None:
