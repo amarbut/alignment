@@ -35,7 +35,7 @@ def refusal_score(
 def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, phrase_ids = None, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, print_response = False, tokenizer = None):
     if phrase_ids:
         print("phrase_ids:", phrase_ids)
-        return phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size)
+        return phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size, print_response)
     
     else:
         refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
@@ -74,7 +74,7 @@ def make_phrase_ids(tokenizer):
     return [tokenizer.encode(p, add_special_tokens=False) for p in phrases]
 
 
-def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size=32):
+def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size=32, print_response = False):
     scores = torch.empty(len(instructions), device="cpu", dtype=torch.float32)
     idx = 0
     for i in range(0, len(instructions), batch_size):
