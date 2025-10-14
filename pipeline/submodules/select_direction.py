@@ -32,7 +32,7 @@ def refusal_score(
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-def get_refusal_scores(model, instructions, tokenizer, tokenize_instructions_fn, refusal_toks, phrase_ids = None, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, print_response = False):
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, phrase_ids = None, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, print_response = False, tokenizer = None):
     # if phrase_ids:
     #     return phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size)
     
@@ -214,7 +214,7 @@ def select_direction(
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_hooks=[], batch_size=batch_size)
     
     #print("baseline_refusal_scores_harmful:", baseline_refusal_scores_harmful)
-    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_hooks=[], batch_size=batch_size)
+    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_hooks=[], batch_size=batch_size, print_response = True, tokenizer = model.tokenizer)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
