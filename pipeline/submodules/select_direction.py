@@ -51,7 +51,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
             ).logits
         
         if print_response == True and i % 240 == 0:
-            prompt_text = tokenizer(instructions[i], return_tensors="pt").to(model.device)
+            prompt_text = tokenized_instructions[0].to(model.device)
             with torch.no_grad():
                 output_ids = model.generate(
                     **prompt_text,
