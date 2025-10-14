@@ -17,7 +17,7 @@ from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_p
 
 # forget the logits and softmax scoring
 # score refusals in binary for actual generated tokens
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None):
 
     refusal_scores = torch.zeros(len(instructions), device=model.device)
 
@@ -267,10 +267,10 @@ def select_direction(
     batch_size=32
 ):
     
-    if phrase_refusal:
-        phrase_ids = model_base.refusal_phrases
-    else:
-        phrase_ids = None
+    # if phrase_refusal:
+    #     phrase_ids = model_base.refusal_phrases
+    # else:
+    #     phrase_ids = None
     
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
@@ -278,10 +278,10 @@ def select_direction(
     n_pos, n_layer, d_model = candidate_directions.shape
     print("harmful_length:", len(harmful_instructions))
     print("harmless_length:", len(harmless_instructions))
-    baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_hooks=[], batch_size=batch_size, print_response = True, tokenizer = model_base.tokenizer)
+    baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = model_base.tokenizer)
     
     #print("baseline_refusal_scores_harmful:", baseline_refusal_scores_harmful)
-    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_hooks=[], batch_size=batch_size)
+    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = mode_base.tokenizer)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
@@ -330,7 +330,7 @@ def select_direction(
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
        
 
-            refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = mode_base.tokenizer)
             ablation_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
 
     for source_pos in range(-n_pos, 0):
@@ -342,7 +342,7 @@ def select_direction(
             fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_input_pre_hook(vector=refusal_vector, coeff=coeff))]
             fwd_hooks = []
 
-            refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = mode_base.tokenizer)
             steering_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
 
     plot_refusal_scores(
