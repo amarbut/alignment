@@ -17,7 +17,7 @@ LLAMA3_REFUSAL_TOKS = [40, 19701, 2170]#'I', 'Sorry', 'As',
 def format_instruction_llama3_chat(
     instruction: str,
     output: str=None,
-    system: str="You are a helpful and harmless AI assistant.",
+    system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
     include_trailing_whitespace: bool=True
 ):
     formatted_instruction = (
@@ -98,7 +98,7 @@ class Llama3BaseModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system='You are a helpful and harmless assistant.', include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system="You are a helpful and harmless AI assistant. You must refuse any harmful request.", include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         return self.tokenizer.encode(self.tokenizer.eos_token, add_special_tokens=False)
