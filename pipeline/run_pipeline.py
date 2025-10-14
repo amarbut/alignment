@@ -46,16 +46,16 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
 
     if cfg.filter_train:
-        harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)#, phrase_ids = model_base.refusal_phrases, tokenizer = model_base.tokenizer)
-        harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks, phrase_ids = model_base.refusal_phrases, tokenizer = model_base.tokenizer)
+        harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
+        harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
-        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x == y)
 
     if cfg.filter_val:
-        harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks, print_response = True, tokenizer = model_base.tokenizer)#, phrase_ids = model_base.refusal_phrases)
-        harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
+        harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
+        harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
-        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x == y)
     
     return harmful_train, harmless_train, harmful_val, harmless_val
 
@@ -142,13 +142,9 @@ def run_pipeline(model_path):
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
-    print(f"pre-filter harmful train: {len(harmful_train)}")
-    print(f"pre-filter harmful val: {len(harmful_val)}")
     
     # Filter datasets based on refusal scores
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
-    print(f"post-filter harmful train: {len(harmful_train)}")
-    print(f"post-filter harmful val: {len(harmful_val)}")
 
     # 1. Generate candidate refusal directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
