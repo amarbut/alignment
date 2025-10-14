@@ -35,7 +35,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 
         inst_lens = (tokenized_instructions["input_ids"] != tokenizer.pad_token_id).sum(dim=1)
         continuations = []
-        for row, in_len in enumerate(input_lens.tolist()):
+        for row, in_len in enumerate(inst_lens.tolist()):
             cont_ids = output_ids[row, in_len:]  # continuation after the prompt
             continuations.append(tokenizer.decode(cont_ids, skip_special_tokens=True))
         
