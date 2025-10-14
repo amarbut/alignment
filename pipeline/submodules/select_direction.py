@@ -110,6 +110,19 @@ def phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructio
         idx += input_ids.size(0)
         del logits
         torch.cuda.empty_cache()
+        
+        if print_response == True and i == 0:
+            prompt_text = tokenized_instructions.to(model.device)
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **prompt_text,
+                    max_new_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                )
+            text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            print(text)
+        
     return scores
 
 
