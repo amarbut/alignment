@@ -98,7 +98,7 @@ class Llama3BaseModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system='You are a helpful and harmless assistant.', include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         return self.tokenizer.encode(self.tokenizer.eos_token, add_special_tokens=False)
