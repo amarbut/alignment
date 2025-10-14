@@ -32,7 +32,7 @@ def refusal_score(
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-def get_refusal_scores(model, instructions, tokenizer, tokenize_instructions_fn, refusal_toks, phrase_ids, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
     # if phrase_ids:
     #     return phrase_refusal_scores(model, tokenizer, tokenize_instructions_fn, instructions, phrase_ids, batch_size)
     
