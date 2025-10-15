@@ -139,6 +139,7 @@ def run_pipeline(model_path):
     cfg = Config(model_alias=model_alias, model_path=model_path)
 
     model_base = construct_model_base(cfg.model_path)
+    model_base.config.pad_token_id = model_base.tokenizer.pad_token_id
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
