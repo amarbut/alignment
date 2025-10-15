@@ -86,7 +86,7 @@ class Llama3BaseModel(ModelBase):
         model.config.use_cache = False
         model.requires_grad_(False) 
         torch.set_grad_enabled(False)
-        model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.pad_token_id = self.tokenizer.pad_token_id
 
         return model
 
