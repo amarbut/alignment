@@ -436,7 +436,7 @@ def select_direction(
     filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (x["refusal_score"], -x["steering_score"], x["kl_div_score"]))
 
     # now return the best position, layer, and direction
-    score, pos, layer = filtered_scores[0]
+    score, pos, layer = filtered_scores[0]["refusal_score"], filtered_scores[0]["position"], filtered_scores[0]["layer"]
 
     print(f"Selected direction: position={pos}, layer={layer}")
     print(f"Refusal score: {ablation_refusal_scores[pos, layer]:.4f} (baseline: {baseline_refusal_scores_harmful.mean().item():.4f})")
