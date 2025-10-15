@@ -226,7 +226,7 @@ def plot_refusal_scores(
         ax.plot(
             list(range(n_layer)),
             refusal_scores[i].cpu().numpy(),
-            label=f'{i}: {repr(token_labels[i])}'
+            label=f'{i}'
         )
 
     if baseline_refusal_score is not None:
