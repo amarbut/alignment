@@ -430,7 +430,7 @@ def select_direction(
     with open(f"{artifact_dir}/direction_evaluations_filtered.json", 'w') as f:
         json.dump(json_output_filtered_scores, f, indent=4)
 
-    assert len(json_outputfiltered_scores) > 0, "All scores have been filtered out!"
+    assert len(json_output_filtered_scores) > 0, "All scores have been filtered out!"
 
     # sorted in descending order
     filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (x["refusal_score"], -x["steering_score"], x["kl_div_score"]))
