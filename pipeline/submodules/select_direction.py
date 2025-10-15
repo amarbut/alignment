@@ -425,7 +425,7 @@ def select_direction(
     with open(f"{artifact_dir}/direction_evaluations.json", 'w') as f:
         json.dump(json_output_all_scores, f, indent=4)
 
-    json_output_filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (-x["refusal_score"], -x["steering_score"], x["kl_div"]))
+    json_output_filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (x["refusal_score"], -x["steering_score"], x["kl_div_score"]))
 
     with open(f"{artifact_dir}/direction_evaluations_filtered.json", 'w') as f:
         json.dump(json_output_filtered_scores, f, indent=4)
@@ -433,7 +433,7 @@ def select_direction(
     assert len(json_outputfiltered_scores) > 0, "All scores have been filtered out!"
 
     # sorted in descending order
-    filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (-x["refusal_score"], -x["steering_score"], x["kl_div"]))
+    filtered_scores = sorted(json_output_filtered_scores, key=lambda x: (x["refusal_score"], -x["steering_score"], x["kl_div_score"]))
 
     # now return the best position, layer, and direction
     score, pos, layer = filtered_scores[0]
