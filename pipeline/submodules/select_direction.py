@@ -32,6 +32,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                     max_new_tokens=16,
                     temperature=0.7,
                     top_p=0.9,
+                    pad_token_id = tokenizer.eos_token_id
                 )
                 
         inst_lens = (tokenized_instructions["input_ids"] != tokenizer.pad_token_id).sum(dim=1)
