@@ -50,8 +50,10 @@ def tokenize_instructions_mixtral_chat(
             for instruction in instructions
         ]
 
-    result = tokenizer.apply_chat_template(
-        prompts,
+    result = tokenizer(tokenizer.apply_chat_template(prompts,
+                                                     tokenize=False,
+                                                     add_generation_prompt=True),
+        
         padding=True,
         truncation=False,
         return_tensors="pt",
