@@ -118,7 +118,7 @@ class MixtralModel(ModelBase):
         return torch.nn.ModuleList([block_module.self_attn for block_module in self.model_block_modules])
     
     def _get_mlp_modules(self):
-        return torch.nn.ModuleList([block_module.mlp for block_module in self.model_block_modules])
+        return torch.nn.ModuleList([block_module.block_sparse_moe for block_module in self.model_block_modules])
 
     # def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):
     #     return functools.partial(orthogonalize_mixtral_weights, direction=direction)
