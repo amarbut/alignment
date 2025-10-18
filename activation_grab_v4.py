@@ -49,12 +49,16 @@ def load_model_tokenizer(model_id, quant, compute_dtype):
 
 # ---- build chat prompt (simple, using the tokenizer's chat template)
 
-def build_prompt(prompt_format, text, tokenizer):
+def build_prompt(prompt_format, text, system_prompt, tokenizer):
     if prompt_format == 'chat':
         messages = [{"role": "user", "content": text}]
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     elif prompt_format == 'base':
-        prompt_text = text
+        prompt_text = (
+            f"System: {system_prompt}\n\n"
+            f"User: {text}\n\n"
+            f"Assistant:"
+        )
     return prompt_text
 
 # ---- generate response and collect activations
@@ -105,7 +109,7 @@ def gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k = 5, max_new_t
             
     return captures
 
-def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_tokens = 200, temperature=0.7, top_p=0.9, save_loc=None, data_loc=None):
+def activation_capture(model_id, quant, dtype, prompt, system_prompt, last_k = 5, max_new_tokens = 200, temperature=0.7, top_p=0.9, save_loc=None, data_loc=None):
     model_name = os.path.basename(model_id)
     #load model & tokenizer
     model, tokenizer = load_model_tokenizer(model_id, quant, dtype)
@@ -134,7 +138,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             hl_idx = 0
             for p in hl_sample:
                 print("Harmless prompt ", hl_idx)
-                prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
+                prompt_text = build_prompt(prompt_format, p["instruction"], system_prompt, tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
                 hl_idx += 1
@@ -151,7 +155,7 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
             hf_idx = 0
             for p in hf_prompts:
                 print("Harmful prompt ", hf_idx)
-                prompt_text = build_prompt(prompt_format, p["instruction"], tokenizer)
+                prompt_text = build_prompt(prompt_format, p["instruction"], system_prompt, tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hf_acts.append(captures)
                 hf_idx += 1
@@ -161,7 +165,8 @@ def activation_capture(model_id, quant, dtype, prompt, last_k = 5, max_new_token
                 pickle.dump(hf_acts, hf_sf)
         
     else: #run on single prompt
-        captures = gen_last_k(model, tokenizer, prompt, decoder_loc, last_k, max_new_tokens, temperature, top_p)
+        prompt_text = build_prompt(prompt_format, prompt, system_prompt, tokenizer)
+        captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
         
         if save_loc:
             os.makedirs(f"{save_loc}/", exist_ok=True)
@@ -181,6 +186,7 @@ if __name__ == "__main__":
     p.add_argument("--quant", type=str, default="4bit", choices=["4bit", "8bit", "none"])
     p.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16"])
     p.add_argument("--prompt", type=str, default="Explain why the sky appears blue.")
+    p.add_argument("--system_prompt", type=str, default="You are a helpful and harmless AI assistant. You must refuse any harmful request.")
     p.add_argument("--max_new_tokens", type=int, default=200)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -191,6 +197,6 @@ if __name__ == "__main__":
     
     args = p.parse_args()
     
-    activation_capture(args.model_id, args.quant, args.dtype, args.prompt, args.last_k, args.max_new_tokens, args.temperature, args.top_p, args.save_loc, args.data_loc)
+    activation_capture(args.model_id, args.quant, args.dtype, args.prompt, args.system_prompt, args.last_k, args.max_new_tokens, args.temperature, args.top_p, args.save_loc, args.data_loc)
 
 
