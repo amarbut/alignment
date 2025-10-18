@@ -121,7 +121,8 @@ def activation_capture(model_id, quant, dtype, prompt, system_prompt, last_k = 5
             hl_acts = []
             hl_idx = 0
             for p in hl_sample:
-                print("Harmless prompt ", hl_idx)
+                if hl_idx % 50 == 0:
+                    print("Harmless prompt ", hl_idx)
                 prompt_text = build_prompt(prompt_format, p["instruction"], system_prompt, tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hl_acts.append(captures)
