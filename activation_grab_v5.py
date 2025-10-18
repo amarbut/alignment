@@ -139,7 +139,8 @@ def activation_capture(model_id, quant, dtype, prompt, system_prompt, last_k = 5
             hf_acts = []
             hf_idx = 0
             for p in hf_prompts:
-                print("Harmful prompt ", hf_idx)
+                if hf_idx % 50 == 0:
+                    print("Harmful prompt ", hf_idx)
                 prompt_text = build_prompt(prompt_format, p["instruction"], system_prompt, tokenizer)
                 captures = gen_last_k(model, tokenizer, prompt_text, decoder_loc, last_k, max_new_tokens, temperature, top_p)
                 hf_acts.append(captures)
