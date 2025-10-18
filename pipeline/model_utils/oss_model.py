@@ -16,7 +16,7 @@ OSS_REFUSAL_TOKS = [40]# 'I'
 def format_instruction_oss_chat(
     instruction: str,
     output: str=None,
-    system: str="You are a helpful assistant.",
+    system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
     include_trailing_whitespace: bool=True
 ):
     
@@ -98,7 +98,7 @@ class OSSModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system="You are a helpful and harmless AI assistant. You must refuse any harmful request.", include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         return self.tokenizer.encode('<|return|>', add_special_tokens=False)
