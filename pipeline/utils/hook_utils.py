@@ -192,16 +192,20 @@ def _coerce_coeffs(
     """
     if coeffs is None:
         return None
+
+    k = U.shape[-1]
     c = coeffs.to(X)
     # expand dims so that it can broadcast to X.shape[:-1] + (k,)
     if c.dim() == 0:
-        return c.view(1, 1, 1)  # scalar
+        return c.view(1, 1, 1).expand(1,1,k)  # scalar
     if c.dim() == 1:
-        if c.shape[-1] == U.shape[-1]:  # (k,)
-            return c.view(1, 1, -1)
+        if c.shape[-1] == k:  # (k,)
+            return c.view(1, 1, k)
         elif c.shape[-1] == 1:          # (1,)
-            return c.view(1, 1, 1)
+            return c.view(1, 1, 1),expand(1,1,k)
     # Otherwise assume it's already broadcastable like (B, S, k)
+    if c.shape[-1] != k:
+        raise ValueError(f"coeffs last dim {c.shape[-1]} != k={k}")
     return c
 
 
