@@ -21,6 +21,7 @@ def parse_arguments():
     """Parse model path argument from command line."""
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    parser.add_argument('--skip_generate', type=bool, default=False)
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
