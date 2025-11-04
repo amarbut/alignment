@@ -76,7 +76,7 @@ def generate_and_save_activations(model_base, harmless_train, harmful_train, cfg
     torch.save(hf_acts, out_path)
 
     hl_acts = get_activations(
-        model_base
+        model_base,
         harmless_train,
         batch_size=batch_size,
     )
