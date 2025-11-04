@@ -22,6 +22,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--skip_generate', type=bool, default=False)
+    parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"]
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -138,9 +139,9 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
-def run_pipeline(model_path, skip_generate = False):
+def run_pipeline(model_path, skip_generate, method):
     """Run the full pipeline."""
-    model_alias = os.path.basename(model_path)
+    model_alias = os.path.basename(model_path)+f"/method"
     cfg = Config(model_alias=model_alias, model_path=model_path)
 
     model_base = construct_model_base(cfg.model_path)
@@ -169,19 +170,19 @@ def run_pipeline(model_path, skip_generate = False):
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, res["components"][:,:3]) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(res["components"][:,:3], coeffs=torch.tensor(-1.0)))], []
 
-    # 3a. Generate and save completions on harmful evaluation datasets
+    print("Generate and save completions on harmful evaluation datasets")
     for dataset_name in cfg.evaluation_datasets:
         generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
         generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
         generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
 
-    # 3b. Evaluate completions and save results on harmful evaluation datasets
+    print("Evaluate completions and save results on harmful evaluation datasets")
     for dataset_name in cfg.evaluation_datasets:
         evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
         evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
         evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
     
-    # 4a. Generate and save completions on harmless evaluation dataset
+    print("Generate and save completions on harmless evaluation dataset")
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
@@ -189,15 +190,15 @@ def run_pipeline(model_path, skip_generate = False):
     actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(res["components"][:,:3], coeffs=torch.tensor(+1.0)))], []
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
-    # 4b. Evaluate completions and save results on harmless evaluation dataset
+    print("Evaluate completions and save results on harmless evaluation dataset")
     evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
     evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
 
-    # 5. Evaluate loss on harmless datasets
+    print("Evaluate loss on harmless datasets")
     evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
     evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
     evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, method=args.method)
