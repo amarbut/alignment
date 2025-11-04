@@ -68,7 +68,7 @@ def generate_and_save_activations(model_base, harmless_train, harmful_train, cfg
         os.makedirs(cfg.artifact_path(), 'generate_acts')
 
     hf_acts = get_activations(
-        model_base
+        model_base,
         harmful_train,
         batch_size=batch_size,
     )
