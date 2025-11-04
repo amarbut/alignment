@@ -94,7 +94,7 @@ def select_and_save_cpca(cfg, model_base, harmful_acts, harmless_acts, topk = 3,
     with open(f'{cfg.artifact_path()}/select_cpca/subspace_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
-    torch.save(direction, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
+    torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
 
     return layer, pos, res
 
