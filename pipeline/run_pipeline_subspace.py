@@ -8,7 +8,7 @@ from dataset.load_dataset import load_dataset_split, load_dataset
 
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
-from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks
+from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks, get_all_subspace_ablation_hooks, get_activation_addition_subspace_input_pre_hook
 
 from pipeline.submodules.generate_directions import generate_directions
 from pipeline.submodules.select_direction import select_direction, get_refusal_scores
