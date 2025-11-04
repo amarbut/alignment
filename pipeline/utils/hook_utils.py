@@ -141,14 +141,15 @@ def _prep_basis(
       - Orthonormalize columns (QR), so projection is (X @ U) @ U^T, or
       - Normalize columns and later use exact projector with (U^T U)^-1.
     """
-    U = basis.to(like)
+    U = basis.to(device=like.device, dtype=torch.float32) #downgrade dtype for math function
     if orthonormalize:
         # torch.linalg.qr is fast & numerically stable; columns of Q are orthonormal
         Q, _ = torch.linalg.qr(U, mode="reduced")
-        return Q
+        return Q.to(dtype=like.dtype) #cast back to the original dtype
     else:
         # Just prevent degenerate columns; exact projector will handle non-orthonormality
-        return U / (U.norm(dim=0, keepdim=True) + eps)
+        U = U / (U.norm(dim=0, keepdim=True) + eps)
+        return U.to(dtype=like.dtype)
 
 def _project_onto_subspace(
     X: Float[Tensor, "... d_model"],
@@ -161,13 +162,18 @@ def _project_onto_subspace(
     If U is orthonormal: P = U U^T.
     Else:                P = U (U^T U)^-1 U^T  (via pinv for robustness).
     """
+    Xdt = X.dtype
+    X = X.to(torch.float32)
+    U = U.to(torch.float32)
     if orthonormal:
         # (..., d) @ (d, k) -> (..., k) ; (..., k) @ (k, d) -> (..., d)
-        return (X @ U) @ U.transpose(-1, -2)
+        proj = (X @ U) @ U.transpose(-1, -2)
+        return proj.to(dtype = Xdt)
     else:
         gram = U.transpose(-1, -2) @ U                          # (k, k)
         gram_inv = torch.linalg.pinv(gram)                      # (k, k)
-        return ((X @ U) @ gram_inv) @ U.transpose(-1, -2)       # (..., d)
+        proj = ((X @ U) @ gram_inv) @ U.transpose(-1, -2)       # (..., d)
+        return proj.to(dtype = Xdt)
 
 def _coerce_coeffs(
     coeffs: Optional[Tensor],
