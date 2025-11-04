@@ -51,13 +51,13 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
-        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+        harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x == y)
 
     if cfg.filter_val:
         harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks, tokenizer = model_base.tokenizer)
         harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
-        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+        harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x == y)
     
     return harmful_train, harmless_train, harmful_val, harmless_val
 
