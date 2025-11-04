@@ -3,7 +3,7 @@ import torch
 import contextlib
 import functools
 
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Optional, Union
 from jaxtyping import Float
 from torch import Tensor
 
