@@ -159,7 +159,7 @@ def run_pipeline(model_path, skip_generate = False):
     
     # 2. Select the most effective refusal direction
     # TODO: hard-coded settings
-    layer, pos, res = select_and_save_cpca(cfg, model_base, harmful_acts, harmless_acts, topk = 3, keep_var = 0.999, eig_floor_frac = 1e-3) 
+    layer, pos, res = select_and_save_cpca(cfg, model_base, hf_acts, hl_acts, topk = 3, keep_var = 0.999, eig_floor_frac = 1e-3) 
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     # TODO: # hard-coded top 3 components
