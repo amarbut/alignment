@@ -65,7 +65,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
 def generate_and_save_activations(model_base, harmless_train, harmful_train, cfg, batch_size: int = 32):
     
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_acts')):
-        os.makedirs(cfg.artifact_path(), 'generate_acts')
+        os.makedirs(os.path.join(cfg.artifact_path(), 'generate_acts'))
 
     hf_acts = get_activations(
         model_base,
