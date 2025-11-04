@@ -41,7 +41,7 @@ def get_activations(model_base, instructions: List[str], *, batch_size: int = 32
     tokenizer = model_base.tokenizer
     tokenize_instructions_fn = model_base.tokenize_instructions_fn
     block_modules = model_base.model_block_modules
-    positions = list(range(-len(model_base.eoi_toks), 0)
+    positions = list(range(-len(model_base.eoi_toks), 0))
         
     torch.cuda.empty_cache()
 
