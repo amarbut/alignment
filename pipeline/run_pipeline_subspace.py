@@ -146,9 +146,11 @@ def run_pipeline(model_path, skip_generate = False):
 
     # Load and sample datasets
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
+    print("Raw data:", len(harmful_train), len(harmless_train))
     
     # Filter datasets based on refusal scores
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
+    print("Filtered_data:", len(harmful_train), len(harmless_train))
 
     # 1. Generate or load candidate refusal directions
     if skip_generate:
