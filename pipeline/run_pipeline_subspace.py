@@ -199,4 +199,4 @@ def run_pipeline(model_path, skip_generate = False):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate)
