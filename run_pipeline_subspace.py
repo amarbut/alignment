@@ -64,7 +64,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
 
 def generate_and_save_activations(model_base, harmless_train, harmful_train, cfg, batch_size: int = 32):
     
-    if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_acts'):
+    if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_acts')):
         os.makedirs(cfg.artifact_path(), 'generate_acts')
 
     hf_acts = get_activations(
@@ -158,10 +158,12 @@ def run_pipeline(model_path, skip_generate = False):
         hf_acts, hl_acts = generate_and_save_activations(model_base, harmless_train, harmful_train, cfg)
     
     # 2. Select the most effective refusal direction
-    layer, pos, res = select_and_save_cpca(cfg, model_base, harmful_acts, harmless_acts, topk = 3, keep_var = 0.999, eig_floor_frac = 1e-3) # fix these
+    # TODO: hard-coded settings
+    layer, pos, res = select_and_save_cpca(cfg, model_base, harmful_acts, harmless_acts, topk = 3, keep_var = 0.999, eig_floor_frac = 1e-3) 
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
-    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, res["components"][:,:3]) # hard-coded top 3 components
+    # TODO: # hard-coded top 3 components
+    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, res["components"][:,:3]) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(res["components"][:,:3], coeffs=-1.0))], []
 
     # 3a. Generate and save completions on harmful evaluation datasets
