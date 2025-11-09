@@ -22,6 +22,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Parse model path argument.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--skip_generate', type=bool, default=False)
+    parser.add_argument('--skip_select', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     return parser.parse_args()
@@ -128,7 +129,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
 
     layer, pos, res = choose_best_cpca(cands[1], cands[0], topk, keep_var, eig_floor_frac)
 
-    with open(f'{cfg.artifact_path()}/select_cpca/subspace_metadata.json', "w") as f:
+    with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
@@ -186,7 +187,7 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
               }
     
 
-def run_pipeline(model_path, skip_generate, method, topk):
+def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)+f"/{method}"
     cfg = Config(model_alias=model_alias, model_path=model_path)
@@ -210,7 +211,13 @@ def run_pipeline(model_path, skip_generate, method, topk):
         cands = method_args["generate_cands"](cfg, model_base, harmless_train, harmful_train)
     
     # 2. Select the most effective refusal direction/subspace
-    layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
+    if skip_select:
+        meta = json.load(open(f'{cfg.artifact_path()}/direction_metadata.json', "r"))
+        layer = meta["layer"]
+        pos = meta["pos"]
+        direction = torch.load(f'{cfg.artifact_path()}/direction.pt', map_location = "cpu")
+    else:
+        layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
@@ -246,4 +253,4 @@ def run_pipeline(model_path, skip_generate, method, topk):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, method=args.method, topk=args.topk)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk)
