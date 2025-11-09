@@ -202,7 +202,7 @@ def _coerce_coeffs(
         if c.shape[-1] == k:  # (k,)
             return c.view(1, 1, k)
         elif c.shape[-1] == 1:          # (1,)
-            return c.view(1, 1, 1),expand(1,1,k)
+            return c.view(1, 1, 1).expand(1,1,k)
     # Otherwise assume it's already broadcastable like (B, S, k)
     if c.shape[-1] != k:
         raise ValueError(f"coeffs last dim {c.shape[-1]} != k={k}")
@@ -283,7 +283,8 @@ def get_activation_addition_subspace_input_pre_hook(
     """
     def hook_fn(module, input):
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
-        U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
+        #U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
+        U = basis.to(device=activation.device, dtype=activation.dtype)
         c = _coerce_coeffs(coeffs, X=activation, U=U)
         activation = activation + c @ U.transpose(-1, -2)
         return (activation, *input[1:]) if isinstance(input, tuple) else activation

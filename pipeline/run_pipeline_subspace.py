@@ -210,7 +210,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     else:
         cands = method_args["generate_cands"](cfg, model_base, harmless_train, harmful_train)
     
-    # 2. Select the most effective refusal direction/subspace
+    # 2. Select or load the most effective refusal direction/subspace
     if skip_select:
         meta = json.load(open(f'{cfg.artifact_path()}/direction_metadata.json', "r"))
         layer = meta["layer"]
