@@ -23,7 +23,7 @@ def parse_arguments():
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--skip_generate', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
-    parser.add_argument('--topk', type=int, default=1, description="Number of components to include in subspace; topk=1 is a single vector")
+    parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
