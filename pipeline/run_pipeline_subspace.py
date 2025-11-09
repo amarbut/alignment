@@ -205,7 +205,7 @@ def run_pipeline(model_path, skip_generate, method, topk):
 
     # 1. Generate or load candidate refusal directions
     if skip_generate:
-        cands = [torch.load(os.path.join(cfg.artifact_path(), p), map_location = "cpu") for p in method_args["candidate_loc"]
+        cands = [torch.load(os.path.join(cfg.artifact_path(), p), map_location = "cpu") for p in method_args["candidate_loc"]]
     else:
         cands = method_args["generate_cands"](cfg, model_base, harmless_train, harmful_train)
     
