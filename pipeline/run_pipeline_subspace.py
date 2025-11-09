@@ -219,6 +219,9 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     else:
         layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
 
+    if direction.dim() == 1:
+        direction = direction.unsqueeze(-1)
+
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-1.0)))], []
