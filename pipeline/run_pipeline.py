@@ -104,12 +104,12 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
 
     completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
     
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w") as f:
-        json.dump(completions, f, indent=4)
+    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w", encoding = "utf-8") as f:
+        json.dump(completions, f, indent=4, ensure_ascii=False)
 
 def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies):
     """Evaluate completions and save results for a dataset."""
-    with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r') as f:
+    with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r', encoding="utf-8") as f:
         completions = json.load(f)
 
     evaluation = evaluate_jailbreak(
@@ -118,8 +118,8 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
         evaluation_path=os.path.join(cfg.artifact_path(), "completions", f"{dataset_name}_{intervention_label}_evaluations.json"),
     )
 
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json', "w") as f:
-        json.dump(evaluation, f, indent=4)
+    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json', "w", encoding="utf-8") as f:
+        json.dump(evaluation, f, indent=4, ensure_ascii=False)
 
 def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label):
     """Evaluate loss on datasets."""
