@@ -67,7 +67,7 @@ def refusal_score(
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
 #UNTOUCHED ORIGINAL ARDITI CODE
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None):
     refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
 
     refusal_scores = torch.zeros(len(instructions), device=model.device)
