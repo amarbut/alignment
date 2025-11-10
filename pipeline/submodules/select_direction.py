@@ -304,7 +304,7 @@ def select_direction(
     for source_pos in range(-n_pos, 0):
         for source_layer in tqdm(range(n_layer), desc=f"Computing KL for source position {source_pos}"):
 
-            ablation_dir = candidate_directions[source_pos, source_layer]
+            ablation_dir = candidate_directions[source_pos, source_layer].unsqueeze(-1)
             fwd_pre_hooks = [(model_base.model_block_modules[layer], get_subspace_ablation_input_pre_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks = [(model_base.model_attn_modules[layer], get_subspace_ablation_output_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_subspace_ablation_output_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
@@ -326,7 +326,7 @@ def select_direction(
     for source_pos in range(-n_pos, 0):
         for source_layer in tqdm(range(n_layer), desc=f"Computing refusal ablation for source position {source_pos}"):
 
-            ablation_dir = candidate_directions[source_pos, source_layer]
+            ablation_dir = candidate_directions[source_pos, source_layer].unsqueeze(-1)
             fwd_pre_hooks = [(model_base.model_block_modules[layer], get_subspace_ablation_input_pre_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks = [(model_base.model_attn_modules[layer], get_subspace_ablation_output_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_subspace_ablation_output_hook(ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
@@ -338,7 +338,7 @@ def select_direction(
     for source_pos in range(-n_pos, 0):
         for source_layer in tqdm(range(n_layer), desc=f"Computing refusal addition for source position {source_pos}"):
 
-            refusal_vector = candidate_directions[source_pos, source_layer]
+            refusal_vector = candidate_directions[source_pos, source_layer].unsqueeze(-1)
             coeff = torch.tensor(1.0)
 
             fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeff=coeff))]
