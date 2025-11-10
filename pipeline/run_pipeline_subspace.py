@@ -147,12 +147,12 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
 
     completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
     
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w") as f:
-        json.dump(completions, f, indent=4)
+    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w", encoding = "utf-8") as f:
+        json.dump(completions, f, indent=4, ensure_ascii=False)
 
 def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies):
     """Evaluate completions and save results for a dataset."""
-    with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r') as f:
+    with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r', encoding="utf-8") as f:
         completions = json.load(f)
 
     evaluation = evaluate_jailbreak(
@@ -161,8 +161,8 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
         evaluation_path=os.path.join(cfg.artifact_path(), "completions", f"{dataset_name}_{intervention_label}_evaluations.json"),
     )
 
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json', "w") as f:
-        json.dump(evaluation, f, indent=4)
+    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_evaluations.json', "w", encoding="utf-8") as f:
+        json.dump(evaluation, f, indent=4, ensure_ascii=False)
 
 def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label):
     """Evaluate loss on datasets."""
@@ -222,6 +222,8 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     if direction.dim() == 1:
         direction = direction.unsqueeze(-1)
 
+    print(f"direction dims = {direction.shape}")
+
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-1.0)))], []
@@ -242,7 +244,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
-    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+1.0)))], []
+    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(1.0)))], []
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
     print("Evaluate completions and save results on harmless evaluation dataset")
