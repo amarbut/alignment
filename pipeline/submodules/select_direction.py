@@ -47,7 +47,6 @@ from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_p
 
 #     return refusal_scores
 
-
 def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
@@ -58,15 +57,12 @@ def refusal_score(
     # we only care about the last tok position
     logits = logits[:, -1, :]
 
-
     probs = torch.nn.functional.softmax(logits, dim=-1)
     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
-    
 
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-#UNTOUCHED ORIGINAL ARDITI CODE
 def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None):
     refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
 
@@ -84,6 +80,8 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
 
     return refusal_scores
+
+
 
 # ARDITI CODE WITH PHRASE REFUSALS AND PRINTING
 # def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, phrase_ids = None, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, print_response = False, tokenizer = None):
@@ -180,12 +178,8 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
         
 #     return scores
 
-
-def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, use_cache=False, max_new_tokens=0) -> Float[Tensor, "n_instructions d_vocab"]:
-    
+def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
     last_position_logits = None
-    
-    model.eval()
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
@@ -194,20 +188,15 @@ def get_last_position_logits(model, tokenizer, instructions, tokenize_instructio
             logits = model(
                 input_ids=tokenized_instructions.input_ids.to(model.device),
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            use_cache=False).logits
+            ).logits
 
         if last_position_logits is None:
-            last_position_logits = logits[:, -1, :].detach().to("cpu")
+            last_position_logits = logits[:, -1, :]
         else:
-            last_position_logits = torch.cat((last_position_logits, logits[:, -1, :].detach().to("cpu")), dim=0)
-            
-        del logits
-        for k in tokenized_instructions:
-            tokenized_instructions[k].detach().to("cpu")
-        del tokenized_instructions
-        torch.cuda.empty_cache()
+            last_position_logits = torch.cat((last_position_logits, logits[:, -1, :]), dim=0)
 
     return last_position_logits
+
 
 def plot_refusal_scores(
     refusal_scores: Float[Tensor, 'n_pos n_layer'],
@@ -397,7 +386,7 @@ def select_direction(
             # the intervention is better at bypassing refusal if the refusal score is low, so we multiply by -1
             sorting_score = -refusal_score
 
-            # we filter out directions if the KL threshold 
+            # we filter out directions in last 20% of layers, over kl-threshold, and steering <0
             discard_direction = filter_fn(
                 refusal_score=refusal_score,
                 steering_score=steering_score,
