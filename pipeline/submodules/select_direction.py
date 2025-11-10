@@ -339,9 +339,9 @@ def select_direction(
         for source_layer in tqdm(range(n_layer), desc=f"Computing refusal addition for source position {source_pos}"):
 
             refusal_vector = candidate_directions[source_pos, source_layer].unsqueeze(-1)
-            coeff = torch.tensor(1.0)
+            coeffs = torch.tensor(1.0)
 
-            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeff=coeff))]
+            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeffs=coeffs))]
             fwd_hooks = []
 
             refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer)
