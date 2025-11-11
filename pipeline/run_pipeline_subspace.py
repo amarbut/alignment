@@ -129,6 +129,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_cpca'))
 
     layer, pos, res = choose_best_cpca(cands[1], cands[0], topk, keep_var, eig_floor_frac)
+    pos = pos-5
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
@@ -136,7 +137,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
     torch.save(res["components"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
 
-    return layer, pos-5, res["components"][:,:topk]
+    return layer, pos, res["components"][:,:topk]
 
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
