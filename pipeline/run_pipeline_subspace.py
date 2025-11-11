@@ -97,9 +97,11 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
     mu_b = torch.zeros(basis.shape[0], device=basis.device, dtype=basis.dtype)
     
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
-        json.dump({"pos": pos, "layer": layer, "mu_b": mu_b}, f, indent=4)
+        json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
     torch.save(direction, f'{cfg.artifact_path()}/direction.pt')
+    
+    torch.save(mu_b, f'{cfg.artifact_path()}/mu_b.pt')
 
     
 
@@ -136,10 +138,11 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     pos = pos-5
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
-        json.dump({"pos": pos, "layer": layer, "mu_b": res["mu_b"]}, f, indent=4)
+        json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
     torch.save(res["components_norm"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
+    torch.save(res["mu_b"], f'{cfg.artifact_path()}/mu_b.pt')
 
     return layer, pos, res["components_norm"][:,:topk], res["mu_b"]
 
