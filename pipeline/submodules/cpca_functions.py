@@ -105,8 +105,8 @@ def align_sign_by_means(C, Xt, Xb, mu_b):
     Returns C_signed, s where s is (k,) in {+1,-1}
     """
     # center by background mean (matches how C was derived)
-    Ht = (X_harm - mu_b) @ C     # (N_h, k)
-    Hb = (X_harml - mu_b) @ C    # (N_r, k)
+    Ht = (Xt - mu_b) @ C     # (N_h, k)
+    Hb = (Xb - mu_b) @ C    # (N_r, k)
 
     diff = Ht.mean(dim=0) - Hb.mean(dim=0)   # (k,)
     s = torch.where(diff >= 0, 1.0, -1.0)    # choose sign so harmful > harmless
