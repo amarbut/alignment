@@ -290,7 +290,7 @@ def get_activation_addition_subspace_input_pre_hook(
         c = _coerce_coeffs(coeffs, X=activation, U=U)
         delta = c @ U.transpose(-1, -2)    # (B,S,d)
         if torch.rand(()) < 0.005:
-            print("Δ mean L2 prop per token:", delta.norm(dim=-1).mean().item()/activation..norm(dim=-1).mean().item())
+            print("Δ mean L2 prop per token:", delta.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
         activation = activation + delta
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
     return hook_fn
