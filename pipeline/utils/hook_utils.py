@@ -241,8 +241,8 @@ def get_subspace_ablation_output_hook(
         activation: Float[Tensor, "batch seq d"] = output[0] if isinstance(output, tuple) else output
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
-        if torch.rand(()) < 0.005:
-            print("Removed mean L2 prop:", proj.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
+        # if torch.rand(()) < 0.005:
+        #     print("Removed mean L2 prop:", proj.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
         activation = activation - proj
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
     return hook_fn

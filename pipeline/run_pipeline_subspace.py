@@ -222,6 +222,8 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
     else:
         layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
 
+    print(f"best dir @ layer {layer} and pos {pos}")
+
     direction = direction.to(model_base.model.device, dtype=getattr(model_base.model, "dtype", torch.float16))
 
     if direction.dim() == 1:
