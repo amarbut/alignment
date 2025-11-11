@@ -25,7 +25,7 @@ def parse_arguments():
     parser.add_argument('--skip_select', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
-    parser.add_argument('--coeff', type=float, default=1, help="Scaling for actadd intervention")
+    parser.add_argument('--coeff', type=float, default=1.0, help="Scaling for actadd intervention")
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -240,7 +240,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction, mu_b) 
-    actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-1.0)))], []
+    actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-coeff)))], []
 
     print("Generate and save completions on harmful evaluation datasets")
     for dataset_name in cfg.evaluation_datasets:
@@ -258,7 +258,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
-    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+1.0)))], []
+    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+coeff)))], []
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
     print("Evaluate completions and save results on harmless evaluation dataset")
