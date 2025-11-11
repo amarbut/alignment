@@ -8,7 +8,7 @@ from dataset.load_dataset import load_dataset_split, load_dataset
 
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
-from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks, get_all_subspace_ablation_hooks, get_activation_addition_subspace_input_pre_hook
+from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks, get_all_subspace_ablation_hooks, get_activation_addition_subspace_input_pre_hook, add_hooks
 
 from pipeline.submodules.generate_directions import generate_directions
 from pipeline.submodules.select_direction import select_direction, get_refusal_scores
@@ -188,7 +188,43 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
                         "select_dirs": select_and_save_cpca
                        }
               }
-    
+
+@torch.no_grad()
+def probe_projection_energy(model_base, U, layer, instructions, positions=list(range(-5, 0)), batch_size=32):
+    """
+    Measures how much of the block-input activations (at `layer`) lies in span(U)
+    on a small batch of `instructions`. Returns a dict with mean norms & ratio.
+    """
+    # Ensure (d,k); do linalg in fp32; orthonormalize once (cheap)
+    if U.dim() == 1: U = U.unsqueeze(-1)
+    U32, _ = torch.linalg.qr(U.to(torch.float32), mode="reduced")
+
+    totals = {"proj": 0.0, "act": 0.0, "n": 0}
+
+    def hook_fn(_, inp):
+        x = inp[0]  # (B,S,d)
+        # select token window (e.g., last-5) to match how you trained cPCA
+        xw = x[:, positions, :].to(torch.float32)          # (B,P,d)
+        proj = (xw @ U32) @ U32.transpose(-1, -2)          # (B,P,d)
+        totals["proj"] += proj.norm(dim=-1).sum().item()   # sum over tokens & batch
+        totals["act"]  += xw.norm(dim=-1).sum().item()
+        totals["n"]    += xw.numel() // xw.shape[-1]       # #tokens = B*P
+
+    # Take a small slice (one batch) for speed
+    bat = instructions[:batch_size]
+    toks = model_base.tokenize_instructions_fn(instructions=bat)
+
+    with add_hooks([(model_base.model_block_modules[layer], hook_fn)], []):
+        _ = model_base.model(
+            input_ids=toks.input_ids.to(model_base.model.device),
+            attention_mask=toks.attention_mask.to(model_base.model.device),
+        )
+
+    mean_proj = totals["proj"] / max(1, totals["n"])
+    mean_act  = totals["act"]  / max(1, totals["n"])
+    ratio = mean_proj / max(1e-12, mean_act)
+    return {"mean_proj_L2": mean_proj, "mean_act_L2": mean_act, "ratio": ratio}
+
 
 def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
     """Run the full pipeline."""
@@ -228,6 +264,17 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
 
     if direction.dim() == 1:
         direction = direction.unsqueeze(-1)
+
+    # check energy on direction for eval datasets
+    harmless_probe = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
+    harmful_probe = random.sample(load_dataset("jailbreakbench"), cfg.n_test)
+
+    U_raw = direction
+
+    e_harml = probe_projection_energy(model_base, U_raw, layer, harmless_probe, positions=list(range(-5,0)))
+    e_harm  = probe_projection_energy(model_base, U_raw, layer, harmful_probe,  positions=list(range(-5,0)))
+    print(f"[ENERGY] harmless: ratio={e_harml['ratio']:.4e} (proj={e_harml['mean_proj_L2']:.4e}, act={e_harml['mean_act_L2']:.4e})")
+    print(f"[ENERGY] harmful:  ratio={e_harm['ratio']:.4e} (proj={e_harm['mean_proj_L2']:.4e}, act={e_harm['mean_act_L2']:.4e})")
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
