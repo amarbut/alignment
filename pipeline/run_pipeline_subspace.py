@@ -25,6 +25,7 @@ def parse_arguments():
     parser.add_argument('--skip_select', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
+    parser.add_argument('--coeff', type=float, default=1, help="Scaling for actadd intervention")
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -135,7 +136,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
     torch.save(res["components"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
 
-    return layer, pos, res["components"][:,:topk]
+    return layer, 5-pos, res["components"][:,:topk]
 
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
@@ -259,4 +260,4 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff)
