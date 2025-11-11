@@ -57,7 +57,7 @@ def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3,
         Xb0 = X_bg - mu_b
         # exact unit variance on harmless along every component
         s2 = (Xb0 @ C).var(dim=0, unbiased=True)  # [r_z]
-        C = C / torch.sqrt(s2.clamp_min(1e-12))   # rescale columns
+        C_norm = C / torch.sqrt(s2.clamp_min(1e-12))   # rescale columns
 
     lam_pos = lam.clamp_min(0)                         # clean up possible negatives here
     explained = lam_pos / lam_pos.sum().clamp_min(eps) # normalize variance
@@ -66,6 +66,7 @@ def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3,
             "V_b": Vb, "var_b": var_b,   # whitening PCs and variances
             "Vz": Vz, "lam": lam,        # cPCs and variances in whitened space
             "components": C,             # cPCs in original space
+            "components_norm": C_norm,   # normalized cPCs in original space
             "explained": explained}      # cPC variances in original space
 
 # iterate through layers and token positions, choose "best" PCA based on contrastive variance concentration
@@ -90,7 +91,7 @@ def mean_gap_on_component(c, Xt, Xb, mu_b):
     return gap / denom
 
 def alt_score_white(res, Xt, Xb):              
-    c1     = res["components"][:, 0]         # dirst component in original space
+    c1     = res["components_norm"][:, 0]         # dirst component in original space
     rr     = rayleigh_from_whitened(res["lam"])
     mg     = mean_gap_on_component(c1, Xt, Xb, res["mu_b"])
     score  = rr + 0.1*mg
