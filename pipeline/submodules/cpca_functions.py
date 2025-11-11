@@ -89,13 +89,31 @@ def mean_gap_on_component(c, Xt, Xb, mu_b):
     denom = (zb.var(unbiased=True).sqrt().item() + 1e-12)  # background scale
     return gap / denom
 
-def alt_score_white(res, Xt, Xb):
-    v1_z   = res["Vz"][:, 0]                 # whitened-space PC1
-    c1     = res["components"][:, 0]         # back-mapped component in original space
+def alt_score_white(res, Xt, Xb):              
+    c1     = res["components"][:, 0]         # dirst component in original space
     rr     = rayleigh_from_whitened(res["lam"])
     mg     = mean_gap_on_component(c1, Xt, Xb, res["mu_b"])
     score  = rr + 0.1*mg
     return score
+
+@torch.no_grad()
+def align_sign_by_means(C, Xt, Xb, mu_b):
+    """
+    C: (H,k) cPCA components (raw, not renormed preferred for steering)
+    Xt, Xb: (N,H) activations at the SAME (layer,pos) used for cPCA
+    mu_b: (H,) background mean from cpca_whitened
+    Returns C_signed, s where s is (k,) in {+1,-1}
+    """
+    # center by background mean (matches how C was derived)
+    Ht = (X_harm - mu_b) @ C     # (N_h, k)
+    Hb = (X_harml - mu_b) @ C    # (N_r, k)
+
+    diff = Ht.mean(dim=0) - Hb.mean(dim=0)   # (k,)
+    s = torch.where(diff >= 0, 1.0, -1.0)    # choose sign so harmful > harmless
+    C_signed = C * s  # broadcast over rows
+
+    return C_signed, s
+
 
 def choose_best_cpca(X_h, X_s, topk: int = 3, keep_var = 0.999, eig_floor_frac = 1e-3):
     L, P = X_h.shape[:2]
@@ -106,8 +124,10 @@ def choose_best_cpca(X_h, X_s, topk: int = 3, keep_var = 0.999, eig_floor_frac =
             Xt, Xb = get_lp_slices(X_h, X_s, li, pi)
             res = cpca_whitened(Xt, Xb, keep_var = keep_var, eig_floor_frac = eig_floor_frac)
             score = alt_score_white(res, Xt, Xb)
+            res["components"], _ = align_sign_by_means(res["components"], Xt, Xb, res["mu_b"])
             
             if score > best[0]:
                 best = (score, li, pi, res)
     _, li, pi, res = best
+    
     return li, pi, res  # res contains components, lam, explained_contrastive, etc.

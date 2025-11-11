@@ -137,6 +137,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
 
     return layer, pos, res["components"][:,:topk]
 
+
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
     """Generate and save completions for a dataset."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
