@@ -225,6 +225,7 @@ def get_subspace_ablation_input_pre_hook(
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
+        print("Removed mean L2:", proj.norm(dim=-1).mean().item())
         activation = activation - proj
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
     return hook_fn
@@ -241,6 +242,7 @@ def get_subspace_ablation_output_hook(
         activation: Float[Tensor, "batch seq d"] = output[0] if isinstance(output, tuple) else output
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
+        print("Removed mean L2:", proj.norm(dim=-1).mean().item())
         activation = activation - proj
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
     return hook_fn
@@ -286,6 +288,8 @@ def get_activation_addition_subspace_input_pre_hook(
         #U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         U = basis.to(device=activation.device, dtype=activation.dtype)
         c = _coerce_coeffs(coeffs, X=activation, U=U)
-        activation = activation + c @ U.transpose(-1, -2)
+        delta = c @ U.transpose(-1, -2)    # (B,S,d)
+        print("Δ mean L2 per token:", delta.norm(dim=-1).mean().item())
+        activation = activation + delta
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
     return hook_fn
