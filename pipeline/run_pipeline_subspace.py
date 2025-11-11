@@ -135,9 +135,9 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
 
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
-    torch.save(res["components"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
+    torch.save(res["components_norm"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
 
-    return layer, pos, res["components"][:,:topk]
+    return layer, pos, res["components_norm"][:,:topk]
 
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
@@ -257,10 +257,10 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
     evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
     evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
 
-    print("Evaluate loss on harmless datasets")
-    evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
-    evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
-    evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
+    # print("Evaluate loss on harmless datasets")
+    # evaluate_loss_for_datasets(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline')
+    # evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
+    # evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
 
 if __name__ == "__main__":
     args = parse_arguments()

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 import torch.nn.functional as F
+from tqdm import tqdm
 
 @torch.no_grad()
 def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3, renorm_cols=True):
@@ -119,8 +120,7 @@ def align_sign_by_means(C, Xt, Xb, mu_b):
 def choose_best_cpca(X_h, X_s, topk: int = 3, keep_var = 0.999, eig_floor_frac = 1e-3):
     L, P = X_h.shape[:2]
     best = (-1.0, None, None, None)  # (score, li, pi, result)
-    for li in range(L):
-        print(f"Layer{li}")
+    for li in tqdm(range(L)):
         for pi in range(P):
             Xt, Xb = get_lp_slices(X_h, X_s, li, pi)
             res = cpca_whitened(Xt, Xb, keep_var = keep_var, eig_floor_frac = eig_floor_frac)
