@@ -121,7 +121,7 @@ def generate_and_save_activations(cfg, model_base, harmless_train, harmful_train
     )
     out_path = os.path.join(cfg.artifact_path(), "generate_acts/hl_activations.pt")
     torch.save(hl_acts, out_path)
-    return hf_acts, hl_acts
+    return hl_acts, hf_acts
 
 
 def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk, keep_var = 0.999, eig_floor_frac = 1e-3):
