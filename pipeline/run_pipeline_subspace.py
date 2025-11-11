@@ -94,12 +94,16 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
         artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
     )
 
+    mu_b = torch.zeros(basis.shape[0], device=basis.device, dtype=basis.dtype)
+    
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
-        json.dump({"pos": pos, "layer": layer}, f, indent=4)
+        json.dump({"pos": pos, "layer": layer, "mu_b": mu_b}, f, indent=4)
 
     torch.save(direction, f'{cfg.artifact_path()}/direction.pt')
 
-    return pos, layer, direction
+    
+
+    return pos, layer, direction, mu_b
 
 def generate_and_save_activations(cfg, model_base, harmless_train, harmful_train, batch_size: int = 32):
     
@@ -132,12 +136,12 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     pos = pos-5
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
-        json.dump({"pos": pos, "layer": layer}, f, indent=4)
+        json.dump({"pos": pos, "layer": layer, "mu_b": res["mu_b"]}, f, indent=4)
 
     torch.save(res, f'{cfg.artifact_path()}/select_cpca/subspace_res.pt')
     torch.save(res["components_norm"][:,:topk], f'{cfg.artifact_path()}/direction.pt')
 
-    return layer, pos, res["components_norm"][:,:topk]
+    return layer, pos, res["components_norm"][:,:topk], res["mu_b"]
 
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
@@ -219,9 +223,10 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
         meta = json.load(open(f'{cfg.artifact_path()}/direction_metadata.json', "r"))
         layer = meta["layer"]
         pos = meta["pos"]
+        mu_b = meta["mu_b"]
         direction = torch.load(f'{cfg.artifact_path()}/direction.pt', map_location = "cpu")
     else:
-        layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
+        layer, pos, direction, mu_b = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
 
     print(f"best dir @ layer {layer} and pos {pos}")
 
@@ -231,7 +236,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
         direction = direction.unsqueeze(-1)
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
-    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
+    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction, mu_b) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-1.0)))], []
 
     print("Generate and save completions on harmful evaluation datasets")

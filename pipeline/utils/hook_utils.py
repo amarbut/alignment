@@ -215,6 +215,7 @@ def _coerce_coeffs(
 
 def get_subspace_ablation_input_pre_hook(
     basis: Float[Tensor, "d_model k"],
+    mu_b: Float[Tensor, "d_model"],
     *,
     orthonormalize: bool = True
 ):
@@ -224,6 +225,8 @@ def get_subspace_ablation_input_pre_hook(
     def hook_fn(module, input):
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
+        mu = mu_b.to(device=activation.device, dtype=activation.dtype).view(1, 1, -1)
+        centered = activation - mu
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
         activation = activation - proj
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
@@ -231,6 +234,7 @@ def get_subspace_ablation_input_pre_hook(
 
 def get_subspace_ablation_output_hook(
     basis: Float[Tensor, "d_model k"],
+    mu_b: Float[Tensor, "d_model"],
     *,
     orthonormalize: bool = True
 ):
@@ -240,6 +244,8 @@ def get_subspace_ablation_output_hook(
     def hook_fn(module, input, output):
         activation: Float[Tensor, "batch seq d"] = output[0] if isinstance(output, tuple) else output
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
+        mu = mu_b.to(device=activation.device, dtype=activation.dtype).view(1, 1, -1)
+        centered = activation - mu
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
         # if torch.rand(()) < 0.005:
         #     print("Removed mean L2 prop:", proj.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
@@ -250,6 +256,7 @@ def get_subspace_ablation_output_hook(
 def get_all_subspace_ablation_hooks(
     model_base,
     basis: Float[Tensor, "d_model k"],
+    mu_b: Float[Tensor, "d_model"],
     *,
     orthonormalize: bool = True
 ):
@@ -259,17 +266,17 @@ def get_all_subspace_ablation_hooks(
     """
     fwd_pre_hooks = [
         (model_base.model_block_modules[layer],
-         get_subspace_ablation_input_pre_hook(basis=basis, orthonormalize=orthonormalize))
+         get_subspace_ablation_input_pre_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     fwd_hooks = [
         (model_base.model_attn_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize))
+         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     fwd_hooks += [
         (model_base.model_mlp_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize))
+         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     return fwd_pre_hooks, fwd_hooks
