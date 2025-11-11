@@ -219,10 +219,10 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     else:
         layer, pos, direction = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
 
+    direction = direction.to(model_base.model.device, dtype=getattr(model_base.model, "dtype", torch.float16))
+
     if direction.dim() == 1:
         direction = direction.unsqueeze(-1)
-
-    print(f"direction dims = {direction.shape}")
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction) 
@@ -244,7 +244,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk):
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
     generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
-    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(1.0)))], []
+    actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+1.0)))], []
     generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
 
     print("Evaluate completions and save results on harmless evaluation dataset")

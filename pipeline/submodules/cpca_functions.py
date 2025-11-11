@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 import torch.nn.functional as F
 
 @torch.no_grad()
-def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3, renorm_cols=True):
+def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3, renorm_cols=False):
     X_target = X_target.to(torch.float64).cpu()
     X_bg     = X_bg.to(torch.float64).cpu()
 
