@@ -26,6 +26,7 @@ def parse_arguments():
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     parser.add_argument('--coeff', type=float, default=1.0, help="Scaling for actadd intervention")
+    parser.add_argument('--tau', type=float, default=1.0, help="Scaling for ablation intervention")
     return parser.parse_args()
 
 def load_and_sample_datasets(cfg):
@@ -198,7 +199,7 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
 
 
 
-def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
+def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, tau):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)+f"/{method}"
     cfg = Config(model_alias=model_alias, model_path=model_path)
@@ -239,7 +240,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
         direction = direction.unsqueeze(-1)
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
-    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction, mu_b) 
+    ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_subspace_ablation_hooks(model_base, direction, mu_b, tau) 
     actadd_fwd_pre_hooks, actadd_fwd_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(-coeff)))], []
 
     print("Generate and save completions on harmful evaluation datasets")
@@ -272,4 +273,4 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau)
