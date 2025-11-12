@@ -269,17 +269,17 @@ def get_all_subspace_ablation_hooks(
     """
     fwd_pre_hooks = [
         (model_base.model_block_modules[layer],
-         get_subspace_ablation_input_pre_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau))
+         get_subspace_ablation_input_pre_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     fwd_hooks = [
         (model_base.model_attn_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau))
+         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     fwd_hooks += [
         (model_base.model_mlp_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau))
+         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
         for layer in range(model_base.model.config.num_hidden_layers)
     ]
     return fwd_pre_hooks, fwd_hooks
