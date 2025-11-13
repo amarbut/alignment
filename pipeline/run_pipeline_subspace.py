@@ -249,7 +249,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
     actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+coeff)))], []
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
-    if baseline:
+    if baseline == True:
         print("Running baseline completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
@@ -259,13 +259,13 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
             generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
             evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
 
-    if ablate:
+    if ablate == True:
         print("Running ablation completions")
         for dataset_name in cfg.evaluation_datasets:
             generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
             evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
 
-    if actadd:
+    if actadd == True:
         print("Running actadd completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
