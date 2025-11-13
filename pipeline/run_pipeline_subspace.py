@@ -23,6 +23,7 @@ def parse_arguments():
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--skip_generate', type=bool, default=False)
     parser.add_argument('--skip_select', type=bool, default=False)
+    parser.add_argument('--align', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     parser.add_argument('--coeff', type=float, default=1.0, help="Scaling for actadd intervention")
@@ -82,7 +83,7 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
 
     return [mean_diffs]
 
-def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk):
+def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk, align):
     """Select and save the direction."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
@@ -131,11 +132,11 @@ def generate_and_save_activations(cfg, model_base, harmless_train, harmful_train
     return hl_acts, hf_acts
 
 
-def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk, keep_var = 0.999, eig_floor_frac = 1e-3):
+def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk, align, keep_var = 0.999, eig_floor_frac = 1e-3):
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_cpca')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_cpca'))
 
-    layer, pos, res = choose_best_cpca(cands[1], cands[0], topk, keep_var, eig_floor_frac)
+    layer, pos, res = choose_best_cpca(cands[1], cands[0], topk, keep_var, eig_floor_frac, align)
     pos = pos-5
 
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
@@ -199,7 +200,7 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
 
 
 
-def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, tau):
+def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, tau, align):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)+f"/{method}"
     cfg = Config(model_alias=model_alias, model_path=model_path)
@@ -230,7 +231,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
         mu_b = meta["mu_b"]
         direction = torch.load(f'{cfg.artifact_path()}/direction.pt', map_location = "cpu")
     else:
-        layer, pos, direction, mu_b = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk) 
+        layer, pos, direction, mu_b = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk, align=align) 
 
     print(f"best dir @ layer {layer} and pos {pos}")
 
@@ -273,4 +274,4 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau, align=args.align)
