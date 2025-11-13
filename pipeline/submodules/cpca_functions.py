@@ -124,8 +124,8 @@ def choose_best_cpca(X_h, X_s, topk: int = 3, keep_var = 0.999, eig_floor_frac =
         for pi in range(P):
             Xt, Xb = get_lp_slices(X_h, X_s, li, pi)
             res = cpca_whitened(Xt, Xb, keep_var = keep_var, eig_floor_frac = eig_floor_frac)
-            res["components"], _ = align_sign_by_means(res["components"], Xt, Xb, res["mu_b"])
-            res["components_norm"], _ = align_sign_by_means(res["components_norm"], Xt, Xb, res["mu_b"])
+            #res["components"], _ = align_sign_by_means(res["components"], Xt, Xb, res["mu_b"])
+            #res["components_norm"], _ = align_sign_by_means(res["components_norm"], Xt, Xb, res["mu_b"])
             score = alt_score_white(res, Xt, Xb)
             
             if score > best[0]:
