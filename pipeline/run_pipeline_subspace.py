@@ -99,7 +99,7 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
         artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
     )
 
-    mu_b = torch.zeros(basis.shape[0], device=basis.device, dtype=basis.dtype)
+    mu_b = torch.zeros(direction.shape[0], device=basis.device, dtype=basis.dtype)
     
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
@@ -216,9 +216,9 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
     harmful_train, harmless_train, harmful_val, harmless_val = load_and_sample_datasets(cfg)
     print("Raw data:", len(harmful_train), len(harmless_train))
     
-    # Filter datasets based on refusal scores
-    harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
-    print("Filtered_data:", len(harmful_train), len(harmless_train))
+    # # Filter datasets based on refusal scores
+    # harmful_train, harmless_train, harmful_val, harmless_val = filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val)
+    # print("Filtered_data:", len(harmful_train), len(harmless_train))
 
     # 1. Generate or load candidate refusal directions
     if skip_generate:
@@ -231,7 +231,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
         meta = json.load(open(f'{cfg.artifact_path()}/direction_metadata.json', "r"))
         layer = meta["layer"]
         pos = meta["pos"]
-        mu_b = meta["mu_b"]
+        mu_b = torch.load(f'{cfg.artifact_path()}/mu_b.pt', map_location = "cpu")
         direction = torch.load(f'{cfg.artifact_path()}/direction.pt', map_location = "cpu")
     else:
         layer, pos, direction, mu_b = method_args["select_dirs"](cfg, model_base, harmful_val, harmless_val, cands, topk = topk, align=align) 
