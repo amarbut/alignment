@@ -24,9 +24,9 @@ def parse_arguments():
     parser.add_argument('--skip_generate', type=bool, default=False)
     parser.add_argument('--skip_select', type=bool, default=False)
     parser.add_argument('--align', type=bool, default=False)
-    parser.add_argument('--baseline', type=bool, default=True)
-    parser.add_argument('--ablate', type=bool, default=True)
-    parser.add_argument('--actadd', type=bool, default=True)
+    parser.add_argument('--no_baseline', type=bool, default=False)
+    parser.add_argument('--no_ablate', type=bool, default=False)
+    parser.add_argument('--no_actadd', type=bool, default=False)
     parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     parser.add_argument('--coeff', type=float, default=1.0, help="Scaling for actadd intervention")
@@ -249,7 +249,7 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
     actadd_refusal_pre_hooks, actadd_refusal_hooks = [(model_base.model_block_modules[layer], get_activation_addition_subspace_input_pre_hook(direction, coeffs=torch.tensor(+coeff)))], []
     harmless_test = random.sample(load_dataset_split(harmtype='harmless', split='test'), cfg.n_test)
 
-    if baseline == True:
+    if no_baseline == False:
         print("Running baseline completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
@@ -259,13 +259,13 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
             generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
             evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies)
 
-    if ablate == True:
+    if no_ablate == False:
         print("Running ablation completions")
         for dataset_name in cfg.evaluation_datasets:
             generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
             evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies)
 
-    if actadd == True:
+    if no_actadd == False:
         print("Running actadd completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
@@ -282,4 +282,4 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau, align=args.align, baseline=args.baseline, ablate=args.ablate, actadd=args.actadd)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau, align=args.align, no_baseline=args.baseline, no_ablate=args.ablate, no_actadd=args.actadd)
