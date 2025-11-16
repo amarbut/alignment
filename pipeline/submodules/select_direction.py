@@ -49,7 +49,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits                                                                          # (batch_size, inst_length, vocab)
 
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits, last_idx)
+        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits, last_idx=last_idx)
 
     return refusal_scores
 
