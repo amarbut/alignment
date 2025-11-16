@@ -51,7 +51,7 @@ def refusal_score(
     masked_probs = torch.softmax(masked_logits, dim=-1) #re-calc probs w/ top-p
     refusal_probs = masked_probs[:, refusal_toks].sum(dim=-1)
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
-    score = torch.log(refusal_probs + eps) - torch.log(nonrefusal_probs + eps)
+    score = torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
     return score
 
