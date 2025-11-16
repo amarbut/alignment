@@ -20,6 +20,8 @@ def refusal_score(
     refusal_toks: Int[Tensor, 'batch seq'],
     last_idx = -1,
     epsilon: Float = 1e-8,
+    temperature = 0.7,
+    top_p = 0.9
 ):
     logits = logits.to(torch.float64)
 
