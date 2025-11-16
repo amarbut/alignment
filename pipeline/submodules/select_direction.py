@@ -18,12 +18,14 @@ from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_p
 def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
+    last_idx = -1,
     epsilon: Float = 1e-8,
 ):
     logits = logits.to(torch.float64)
+    B = logits.size(0)
 
-    # we only care about the last tok position
-    logits = logits[:, -1, :]
+    # we only care about the last position with actual tokens
+    logits = logits[torch.arange(B), last_idx] #matches up index of column with position in last_idx
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
     refusal_probs = probs[:, refusal_toks].sum(dim=-1)
@@ -38,8 +40,8 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
-        # attn = tokenized_instructions["attention_mask"]
-        # last_idx = attn.sum(dim=1)-1
+        attn = tokenized_instructions["attention_mask"]
+        last_idx = attn.sum(dim=1)-1
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
             logits = model(
@@ -47,7 +49,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits                                                                          # (batch_size, inst_length, vocab)
 
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits, last_idx)
 
     return refusal_scores
 
