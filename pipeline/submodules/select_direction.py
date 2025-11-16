@@ -38,11 +38,11 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
-        attn = tokenized_instructions["attention_mask"]
-        last_idx = attn.sum(dim=1)-1
+        # attn = tokenized_instructions["attention_mask"]
+        # last_idx = attn.sum(dim=1)-1
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            out = model(
+            logits = model(
                 input_ids=tokenized_instructions.input_ids.to(model.device),
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits                                                                          # (batch_size, inst_length, vocab)
