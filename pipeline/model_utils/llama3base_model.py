@@ -72,7 +72,7 @@ from pipeline.model_utils.model_base import ModelBase
 
 #     return result
 
-LLAMA3_REFUSAL_TOKS = [40, 19701, 2170]#'I', 'Sorry', 'As',
+LLAMA3_REFUSAL_TOKS = [40, 19701, 2170, 358, 1666, 33386]#'I', 'Sorry', 'As',
 
 def format_instruction_llama3_chat(
     instruction: str,
