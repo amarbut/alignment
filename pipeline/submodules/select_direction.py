@@ -22,16 +22,22 @@ def refusal_score(
     epsilon: Float = 1e-8,
 ):
     logits = logits.to(torch.float64)
-    B = logits.size(0)
 
     # we only care about the last position with actual tokens
-    logits = logits[torch.arange(B), last_idx] #matches up index of column with position in last_idx
+    logits = logits[:,-1,:]
 
-    probs = torch.nn.functional.softmax(logits, dim=-1)
-    refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+    # probs = torch.nn.functional.softmax(logits, dim=-1)
+    # refusal_probs = probs[:, refusal_toks].sum(dim=-1)
 
-    nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
-    return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
+    # nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
+    # score = torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
+
+    #use boolean - is next token going to be in refusal_toks
+    r = torch.as_tensor(refusal_toks, device=logits.device)
+    top1 = logits.argmax(dim=-1)
+    score = torch.isin(top1, r)
+
+    return score
 
 def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None):
     refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
@@ -128,7 +134,7 @@ def select_direction(
     artifact_dir,
     phrase_refusal=False, #include phrase refusals in scoring rather than first token only
     kl_threshold=0.1, # directions larger KL score are filtered out
-    induce_refusal_threshold=0.0, # directions with a lower inducing refusal score are filtered out
+    induce_refusal_threshold=0.0, # directions with less than 0.5 prob of refusing discarded
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
