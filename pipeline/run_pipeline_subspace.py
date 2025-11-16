@@ -115,7 +115,7 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
 
     
 
-    return pos, layer, direction, mu_b
+    return layer, pos, direction, mu_b
 
 def generate_and_save_activations(cfg, model_base, harmless_train, harmful_train, batch_size: int = 32):
     

@@ -62,8 +62,6 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
-        attn = tokenized_instructions["attention_mask"]
-        last_idx = attn.sum(dim=1)-1
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
             logits = model(
@@ -151,17 +149,11 @@ def select_direction(
     coeffs,
     mu_b,
     tau,
-    phrase_refusal=False, #include phrase refusals in scoring rather than first token only
-    kl_threshold=0.1, # directions larger KL score are filtered out
+    kl_threshold=0.1,             # directions larger KL score are filtered out
     induce_refusal_threshold=0.0, # directions with less than 0.5 prob of refusing discarded
-    prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
+    prune_layer_percentage=0.2,   # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
-    
-    # if phrase_refusal:
-    #     phrase_ids = model_base.refusal_phrases
-    # else:
-    #     phrase_ids = None
     
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
