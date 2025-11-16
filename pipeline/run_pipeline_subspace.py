@@ -86,7 +86,7 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
 
     return [mean_diffs]
 
-def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk, align, coeffs, mu_b, tau):
+def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk, align):
     """Select and save the direction."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
