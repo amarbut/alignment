@@ -203,7 +203,7 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
 
 
 
-def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, tau, align, baseline, ablate, actadd):
+def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, tau, align, no_baseline, no_ablate, no_actadd):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)+f"/{method}"
     cfg = Config(model_alias=model_alias, model_path=model_path)
