@@ -92,7 +92,7 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
 
     
-    mu_b = torch.zeros(candidate_directions[0].size(-1), device=model_base.model.device, dtype=basis.dtype)
+    mu_b = torch.zeros(candidate_directions[0].size(-1), device=candidate_directions.device, dtype=candidate_directions.dtype)
 
     pos, layer, direction = select_direction(
         model_base,
