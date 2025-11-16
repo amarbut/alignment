@@ -86,20 +86,25 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
 
     return [mean_diffs]
 
-def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk, align):
+def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions, topk, align, coeffs, mu_b, tau):
     """Select and save the direction."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
+
+    
+    mu_b = torch.zeros(direction.shape[0], device=basis.device, dtype=basis.dtype)
 
     pos, layer, direction = select_direction(
         model_base,
         harmful_val,
         harmless_val,
         candidate_directions[0],
-        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction"),
+        coeffs = 1.0,
+        mu_b = mu_b,
+        tau = 1.0
     )
 
-    mu_b = torch.zeros(direction.shape[0], device=basis.device, dtype=basis.dtype)
     
     with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
         json.dump({"pos": pos, "layer": layer}, f, indent=4)
