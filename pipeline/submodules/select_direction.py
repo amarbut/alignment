@@ -32,10 +32,24 @@ def refusal_score(
     # nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     # score = torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
-    #use boolean - is next token going to be in refusal_toks
-    r = torch.as_tensor(refusal_toks, device=logits.device)
-    top1 = logits.argmax(dim=-1)
-    score = torch.isin(top1, r)
+    # apply temperature and top-p to match generation
+    logits = logits / temperature    # (B, V)
+    probs = torch.softmax(logits, dim=-1) 
+    sorted_probs, sorted_idx = probs.sort(dim=-1, descending=True) 
+    cdf = sorted_probs.cumsum(dim=-1)
+    keep_sorted = cdf <= top_p                          #keep top_p tokens
+    keep_sorted[..., 0] = True                          # always keep top-1
+    
+    keep = torch.zeros_like(probs, dtype=torch.bool)
+    keep.scatter_(1, sorted_idx, keep_sorted)           # redistribute mask to vocab order
+    
+    neg_inf = torch.finfo(logits.dtype).min
+    masked_logits = torch.where(keep, logits, neg_inf)  # mask non-kept logits w/ -inf
+    
+    masked_probs = torch.softmax(masked_logits, dim=-1) #re-calc probs w/ top-p
+    refusal_probs = masked_probs[:, refusal_toks].sum(dim=-1)
+    nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
+    score = torch.log(refusal_probs + eps) - torch.log(nonrefusal_probs + eps)
 
     return score
 
