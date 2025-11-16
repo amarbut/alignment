@@ -282,4 +282,4 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau, align=args.align, no_baseline=args.baseline, no_ablate=args.ablate, no_actadd=args.actadd)
+    run_pipeline(model_path=args.model_path, skip_generate=args.skip_generate, skip_select=args.skip_select, method=args.method, topk=args.topk, coeff=args.coeff, tau=args.tau, align=args.align, no_baseline=args.no_baseline, no_ablate=args.no_ablate, no_actadd=args.no_actadd)
