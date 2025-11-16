@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import torch.nn.functional as F
 from tqdm import tqdm
+from pipeline.submodules.select_direction import refusal_score, get_refusal_scores
 
 @torch.no_grad()
 def cpca_whitened(X_target, X_bg, eps=1e-6, keep_var=0.999, eig_floor_frac=1e-3, renorm_cols=True):

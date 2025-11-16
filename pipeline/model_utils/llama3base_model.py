@@ -10,9 +10,21 @@ from jaxtyping import Int, Float
 from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
 
+LLAMA3_CHAT_TEMPLATE = """<|start_header_id|>user<|end_header_id|>
 
+{instruction}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
-LLAMA3_REFUSAL_TOKS = [40, 19701, 2170]#'I', 'Sorry', 'As',
+"""
+
+LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
+
+{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{instruction}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+
+LLAMA3_REFUSAL_TOKS = [40]#, 358, 19701, 68697, 33386, 14931, 2170, 1666, 439, 300] # 'I', ' I', 'Sorry', 'sorry', ' Sorry', ' sorry', 'As', ' As', 'as', ' as'
 
 def format_instruction_llama3_chat(
     instruction: str,
@@ -20,12 +32,14 @@ def format_instruction_llama3_chat(
     system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
     include_trailing_whitespace: bool=True
 ):
-    formatted_instruction = (
-        f"System: {system}\n\n"
-        f"User: {instruction}\n\n"
-        f"Assistant:"
-    ) 
-    
+    if system is not None:
+        formatted_instruction = LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM.format(instruction=instruction, system_prompt=system)
+    else:
+        formatted_instruction = LLAMA3_CHAT_TEMPLATE.format(instruction=instruction)
+
+    if not include_trailing_whitespace:
+        formatted_instruction = formatted_instruction.rstrip()
+
     if output is not None:
         formatted_instruction += output
 
@@ -57,6 +71,52 @@ def tokenize_instructions_llama3_chat(
     )
 
     return result
+
+# LLAMA3_REFUSAL_TOKS = [40, 19701, 2170]#'I', 'Sorry', 'As',
+
+# def format_instruction_llama3_chat(
+#     instruction: str,
+#     output: str=None,
+#     system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
+#     include_trailing_whitespace: bool=True
+# ):
+#     formatted_instruction = (
+#         f"System: {system}\n\n"
+#         f"User: {instruction}\n\n"
+#         f"Assistant:"
+#     ) 
+    
+#     if output is not None:
+#         formatted_instruction += output
+
+#     return formatted_instruction
+
+# def tokenize_instructions_llama3_chat(
+#     tokenizer: AutoTokenizer,
+#     instructions: List[str],
+#     outputs: List[str]=None,
+#     system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
+#     include_trailing_whitespace=True
+# ):
+#     if outputs is not None:
+#         prompts = [
+#             format_instruction_llama3_chat(instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
+#             for instruction, output in zip(instructions, outputs)
+#         ]
+#     else:
+#         prompts = [
+#             format_instruction_llama3_chat(instruction=instruction, system=system, include_trailing_whitespace=include_trailing_whitespace)
+#             for instruction in instructions
+#         ]
+
+#     result = tokenizer(
+#         prompts,
+#         padding=True,
+#         truncation=False,
+#         return_tensors="pt",
+#     )
+
+#     return result
 
 def orthogonalize_llama3_weights(model, direction: Float[Tensor, "d_model"]):
     model.model.embed_tokens.weight.data = get_orthogonalized_matrix(model.model.embed_tokens.weight.data, direction)
@@ -101,7 +161,8 @@ class Llama3BaseModel(ModelBase):
         return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system="You are a helpful and harmless AI assistant. You must refuse any harmful request.", include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode(self.tokenizer.eos_token, add_special_tokens=False)
+        #return self.tokenizer.encode(self.tokenizer.eos_token, add_special_tokens=False)
+        return self.tokenizer.encode(LLAMA3_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
     def _get_refusal_toks(self):
         return LLAMA3_REFUSAL_TOKS
