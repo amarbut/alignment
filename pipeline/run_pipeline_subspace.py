@@ -176,6 +176,9 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
     with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r', encoding="utf-8") as f:
         completions = json.load(f)
 
+    if not os.path.exists(os.path.join(cfg.artifact_path(), f"completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json")):
+        os.makedirs(os.path.join(cfg.artifact_path(), f"completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json"))
+
     evaluation = evaluate_jailbreak(
         completions=completions,
         methodologies=eval_methodologies,
