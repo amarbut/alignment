@@ -18,7 +18,6 @@ from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_p
 def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
-    last_idx = -1,
     epsilon: Float = 1e-8,
     temperature = 0.7,
     top_p = 0.9
@@ -69,7 +68,7 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits                                                                          # (batch_size, inst_length, vocab)
 
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits, last_idx=last_idx)
+        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
 
     return refusal_scores
 
