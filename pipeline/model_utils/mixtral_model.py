@@ -12,7 +12,7 @@ from pipeline.model_utils.model_base import ModelBase
 
 
 
-MIXTRAL_REFUSAL_TOKS = [315] # 'I', ' I', 'Sorry', 'sorry', ' Sorry', ' sorry', 'As', ' As', 'as', ' as'
+MIXTRAL_REFUSAL_TOKS = [315, 19385, 1136] # 'I', 'Sorry''As'
 
 def format_instruction_mixtral_chat(
     instruction: str,
