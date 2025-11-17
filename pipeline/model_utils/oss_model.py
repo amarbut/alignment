@@ -108,6 +108,12 @@ class OSSModel(ModelBase):
     def _get_refusal_toks(self):
         return OSS_REFUSAL_TOKS
 
+    def _get_refusal_score_suffix_toks(self):
+        # Return <|channel|>final<|message|> tokens so refusal scoring happens after the channel prefix
+        # The OSS format requires: <|channel|>final<|message|> before actual text content
+        # <|channel|> = 200005, 'final' = 17196, <|message|> = 200008
+        return [200005, 17196, 200008]
+
     def _get_model_block_modules(self):
         return self.model.model.layers
 
