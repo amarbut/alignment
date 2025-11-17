@@ -21,12 +21,10 @@ def format_instruction_oss_chat(
     include_trailing_whitespace: bool=True
 ):
     
-    # Build messages
-    system_m = Message.from_role_and_content(Role.SYSTEM, SystemContent.new().with_model_identity(model_identity=system))
-    user = Message.from_role_and_content(Role.USER, instruction)
+    formatted_instruction = [{"role": "user", "content": instruction}]
     
-    # Assemble a conversation
-    formatted_instruction = Conversation.from_messages([system_m, user])
+    if system is not None:
+        formatted_instruction = [{"role": "system", "content": system_prompt}] + formatted_instruction
     
     if output is not None:
         formatted_instruction += output
@@ -51,8 +49,14 @@ def tokenize_instructions_oss_chat(
             for instruction in instructions
         ]
 
-    enc = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-    result = [enc.render_conversation_for_completion(p, Role.ASSISTANT) for p in prompts]
+    result = tokenizer(tokenizer.apply_chat_template(prompts,
+                                                     tokenize=False,
+                                                     add_generation_prompt=True),
+        
+        padding=True,
+        truncation=False,
+        return_tensors="pt",
+    )
 
     return result
 
