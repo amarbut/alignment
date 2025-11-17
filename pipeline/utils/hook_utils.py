@@ -175,14 +175,14 @@ def _project_onto_subspace(
         proj = ((X @ U) @ gram_inv) @ U.transpose(-1, -2)       # (..., d)
         return proj.to(dtype = Xdt)
 
-def _coerce_coeffs(
-    coeffs: Optional[Tensor],
+def _coerce_coeff(
+    coeff: Optional[Tensor],
     *,
     X: Tensor,
     U: Tensor
 ) -> Optional[Tensor]:
     """
-    Make coeffs broadcastable for addition along U.
+    Make coeff broadcastable for addition along U.
     Accepts:
       - None (meaning "no addition")
       - scalar () or (1,)
@@ -190,11 +190,11 @@ def _coerce_coeffs(
       - (batch, seq, k) to target specific tokens
     Returns tensor shaped to broadcast with X @ U (i.e., (..., k)).
     """
-    if coeffs is None:
+    if coeff is None:
         return None
 
     k = U.shape[-1]
-    c = coeffs.to(X)
+    c = coeff.to(X)
     # expand dims so that it can broadcast to X.shape[:-1] + (k,)
     if c.dim() == 0:
         return c.view(1, 1, 1).expand(1,1,k)  # scalar
@@ -205,7 +205,7 @@ def _coerce_coeffs(
             return c.view(1, 1, 1).expand(1,1,k)
     # Otherwise assume it's already broadcastable like (B, S, k)
     if c.shape[-1] != k:
-        raise ValueError(f"coeffs last dim {c.shape[-1]} != k={k}")
+        raise ValueError(f"coeff last dim {c.shape[-1]} != k={k}")
     return c
 
 
@@ -286,18 +286,18 @@ def get_all_subspace_ablation_hooks(
 
 def get_activation_addition_subspace_input_pre_hook(
     basis: Float[Tensor, "d_model k"],
-    coeffs: Float[Tensor, "... k"],
+    coeff: Float[Tensor, "... k"],
     *,
     orthonormalize: bool = True
 ):
     """
-    Pure addition along span(basis): X := X + (coeffs @ U^T)
+    Pure addition along span(basis): X := X + (coeff @ U^T)
     """
     def hook_fn(module, input):
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
         #U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         U = basis.to(device=activation.device, dtype=activation.dtype)
-        c = _coerce_coeffs(coeffs, X=activation, U=U)
+        c = _coerce_coeff(coeff, X=activation, U=U)
         delta = c @ U.transpose(-1, -2)    # (B,S,d)
         # if torch.rand(()) < 0.005:
         #     print("Δ mean L2 prop per token:", delta.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
