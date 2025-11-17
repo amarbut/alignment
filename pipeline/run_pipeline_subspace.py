@@ -159,8 +159,8 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
 
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
     """Generate and save completions for a dataset."""
-    if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
-        os.makedirs(os.path.join(cfg.artifact_path(), 'completions'))
+    if not os.path.exists(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}')):
+        os.makedirs(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}'))
 
     if dataset is None:
         dataset = load_dataset(dataset_name)
@@ -168,16 +168,13 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
     completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
     print("\n\n".join(json.dumps(c, indent=2) for c in completions[:5]))
     
-    with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w", encoding = "utf-8") as f:
+    with open(f'{cfg.artifact_path()}/completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_completions.json', "w", encoding = "utf-8") as f:
         json.dump(completions, f, indent=4, ensure_ascii=False)
 
 def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, dataset_name, eval_methodologies, topk, coeff, tau):
     """Evaluate completions and save results for a dataset."""
-    with open(os.path.join(cfg.artifact_path(), f'completions/{dataset_name}_{intervention_label}_completions.json'), 'r', encoding="utf-8") as f:
+    with open(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_completions.json'), 'r', encoding="utf-8") as f:
         completions = json.load(f)
-
-    if not os.path.exists(os.path.join(cfg.artifact_path(), f"completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json")):
-        os.makedirs(os.path.join(cfg.artifact_path(), f"completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json"))
 
     evaluation = evaluate_jailbreak(
         completions=completions,
@@ -185,7 +182,7 @@ def evaluate_completions_and_save_results_for_dataset(cfg, intervention_label, d
         evaluation_path=os.path.join(cfg.artifact_path(), f"completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json"),
     )
 
-    with open(f'{cfg.artifact_path()}/completions/{topk}/{coeff}/{tau}/{dataset_name}_{intervention_label}_evaluations.json', "w", encoding="utf-8") as f:
+    with open(f'{cfg.artifact_path()}/completions/k{topk}/a{coeff}/t{tau}/{dataset_name}_{intervention_label}_evaluations.json', "w", encoding="utf-8") as f:
         json.dump(evaluation, f, indent=4, ensure_ascii=False)
 
 def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label):
