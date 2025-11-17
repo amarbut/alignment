@@ -220,7 +220,7 @@ def select_direction(
 
             refusal_vector = candidate_directions[source_pos, source_layer].unsqueeze(-1)
 
-            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeffs=torch.tensor(+coeffs)))]
+            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeff=torch.tensor(+coeff)))]
             fwd_hooks = []
 
             refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer)
