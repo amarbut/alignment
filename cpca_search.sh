@@ -8,6 +8,7 @@ for K in 2 4 6 8 10
 do
   for C in 1 0.2 0.4 0.6 0.8
   do 
+    echo "-------------RUN WITH k=${K} AND a=${C}----------------"
     python -m pipeline.run_pipeline_subspace \
       --model_path $MODEL_PATH \
       --method cpca \
@@ -19,6 +20,7 @@ do
   
   for T in 1 0.5 1.5 2
   do
+    echo "-------------RUN WITH k=${K} AND t=${T}----------------"
     python -m pipeline.run_pipeline_subspace \
       --model_path $MODEL_PATH \
       --method cpca \
