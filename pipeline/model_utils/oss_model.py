@@ -22,7 +22,7 @@ def format_instruction_oss_chat(
 ):
     
     # Build messages
-    system_m = Message.from_role_and_content(Role.SYSTEM, SystemContent.with_model_identity(system))
+    system_m = Message.from_role_and_content(Role.SYSTEM, SystemContent.with_model_identity(model_identity=system))
     user = Message.from_role_and_content(Role.USER, instructions)
     
     # Assemble a conversation
