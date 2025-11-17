@@ -166,7 +166,7 @@ def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fw
         dataset = load_dataset(dataset_name)
 
     completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
-    print(completions[:5])
+    print("/".join(completions[:5]))
     
     with open(f'{cfg.artifact_path()}/completions/{dataset_name}_{intervention_label}_completions.json', "w", encoding = "utf-8") as f:
         json.dump(completions, f, indent=4, ensure_ascii=False)
