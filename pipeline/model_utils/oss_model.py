@@ -52,7 +52,7 @@ def tokenize_instructions_oss_chat(
         ]
 
     enc = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-    result = enc.render_conversation_for_completion(convo, Role.ASSISTANT)
+    result = [enc.render_conversation_for_completion(p, Role.ASSISTANT) for p in prompts]
 
     return result
 
