@@ -11,7 +11,7 @@ from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
 
 
-OSS_REFUSAL_TOKS = [40]# 'I' 
+OSS_REFUSAL_TOKS = [40, 357, 2305, 1877, 33680, 47483]# 'I', 'As', 'Sorry'
 
 def format_instruction_oss_chat(
     instruction: str,
