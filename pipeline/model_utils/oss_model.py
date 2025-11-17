@@ -26,7 +26,7 @@ def format_instruction_oss_chat(
     user = Message.from_role_and_content(Role.USER, instruction)
     
     # Assemble a conversation
-    convo = Conversation.from_messages([system_m, user])
+    formatted_instruction = Conversation.from_messages([system_m, user])
     
     if output is not None:
         formatted_instruction += output
