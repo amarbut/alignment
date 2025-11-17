@@ -157,7 +157,7 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     return layer, pos, res["components_norm"][:,:topk], res["mu_b"]
 
 
-def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
+def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, topk, coeff, tau, dataset=None):
     """Generate and save completions for a dataset."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}')):
         os.makedirs(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}'))
@@ -259,26 +259,26 @@ def run_pipeline(model_path, skip_generate, skip_select, method, topk, coeff, ta
         print("Running baseline completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
-            generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name)
+            generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', dataset_name, topk=topk, coeff=coeff, tau=tau)
             evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, topk=topk, coeff=coeff, tau=tau)
             print("harmless test set")
-            generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test)
+            generate_and_save_completions_for_dataset(cfg, model_base, baseline_fwd_pre_hooks, baseline_fwd_hooks, 'baseline', 'harmless', dataset=harmless_test, topk=topk, coeff=coeff, tau=tau)
             evaluate_completions_and_save_results_for_dataset(cfg, 'baseline', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies, topk=topk, coeff=coeff, tau=tau)
 
     if no_ablate == False:
         print("Running ablation completions")
         for dataset_name in cfg.evaluation_datasets:
-            generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name)
+            generate_and_save_completions_for_dataset(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation', dataset_name, topk=topk, coeff=coeff, tau=tau)
             evaluate_completions_and_save_results_for_dataset(cfg, 'ablation', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, topk=topk, coeff=coeff, tau=tau)
 
     if no_actadd == False:
         print("Running actadd completions")
         for dataset_name in cfg.evaluation_datasets:
             print("harmful evaluation datasets")
-            generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
+            generate_and_save_completions_for_dataset(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name, topk=topk, coeff=coeff, tau=tau)
             evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', dataset_name, eval_methodologies=cfg.jailbreak_eval_methodologies, topk=topk, coeff=coeff, tau=tau)
             print("harmless test set")
-            generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
+            generate_and_save_completions_for_dataset(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test, topk=topk, coeff=coeff, tau=tau)
             evaluate_completions_and_save_results_for_dataset(cfg, 'actadd', 'harmless', eval_methodologies=cfg.refusal_eval_methodologies, topk=topk, coeff=coeff, tau=tau)
     
     # print("Evaluate loss on harmless datasets")
