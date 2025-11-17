@@ -145,7 +145,7 @@ def select_direction(
     harmless_instructions,
     candidate_directions: Float[Tensor, 'n_pos n_layer d_model'],
     artifact_dir,
-    coeffs,
+    coeff,
     mu_b,
     tau,
     kl_threshold=0.1,             # directions larger KL score are filtered out
