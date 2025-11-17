@@ -9,6 +9,7 @@ from jaxtyping import Int, Float
 
 from pipeline.utils.utils import get_orthogonalized_matrix
 from pipeline.model_utils.model_base import ModelBase
+from openai_harmony import load_harmony_encoding, HarmonyEncodingName, Role, Message, Conversation, DeveloperContent, SystemContent
 
 
 OSS_REFUSAL_TOKS = [40, 357, 2305, 1877, 33680, 47483]# 'I', 'As', 'Sorry'
@@ -20,11 +21,12 @@ def format_instruction_oss_chat(
     include_trailing_whitespace: bool=True
 ):
     
-    formatted_instruction = (
-        f"System: {system}\n\n"
-        f"User: {instruction}\n\n"
-        f"Assistant:"
-    ) 
+    # Build messages
+    system = Message.from_role_and_content(Role.SYSTEM, SystemContent.new.with_instructions(system))
+    user = Message.from_role_and_content(Role.USER, instructions)
+    
+    # Assemble a conversation
+    convo = Conversation.from_messages([system, user])
     
     if output is not None:
         formatted_instruction += output
@@ -49,12 +51,8 @@ def tokenize_instructions_oss_chat(
             for instruction in instructions
         ]
 
-    result = tokenizer(
-        prompts,
-        padding=True,
-        truncation=False,
-        return_tensors="pt",
-    )
+    enc = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+    result = enc.render_conversation_for_completion(convo, Role.ASSISTANT)
 
     return result
 
