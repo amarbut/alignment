@@ -2,7 +2,7 @@
 import torch
 import functools
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from typing import List
 from torch import Tensor
 from jaxtyping import Int, Float
@@ -93,7 +93,14 @@ class MixtralModel(ModelBase):
         return model
 
     def _load_tokenizer(self, model_path):
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+        
+        tokenizer = AutoTokenizer.from_pretrained(model_path, quantization_config=bnb_config)
 
         tokenizer.padding_side = "left"
         tokenizer.pad_token = tokenizer.eos_token
