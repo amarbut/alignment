@@ -22,11 +22,11 @@ def format_instruction_oss_chat(
 ):
     
     # Build messages
-    system = Message.from_role_and_content(Role.SYSTEM, SystemContent.new.with_instructions(system))
+    system_m = Message.from_role_and_content(Role.SYSTEM, SystemContent.with_model_identity(system))
     user = Message.from_role_and_content(Role.USER, instructions)
     
     # Assemble a conversation
-    convo = Conversation.from_messages([system, user])
+    convo = Conversation.from_messages([system_m, user])
     
     if output is not None:
         formatted_instruction += output
