@@ -24,7 +24,7 @@ def format_instruction_mixtral_chat(
     formatted_instruction = [{"role": "user", "content": instruction}]
     
     if system is not None:
-        formatted_instruction = [{"role": "system", "content": system_prompt}] + formatted_instruction
+        formatted_instruction = [{"role": "system", "content": system}] + formatted_instruction
 
 
     if output is not None:
