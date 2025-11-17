@@ -14,7 +14,7 @@ do
       --no_baseline True \
       --no_ablate True \
       --topk $K \
-      --coeffs $C 
+      --coeff $C 
   done
   
   for T in 1 0.5 1.5 2
