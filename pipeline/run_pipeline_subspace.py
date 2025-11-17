@@ -71,7 +71,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
     
     return harmful_train, harmless_train, harmful_val, harmless_val
 
-def generate_and_save_candidate_directions(cfg, model_base, harmless_train, harmless):
+def generate_and_save_candidate_directions(cfg, model_base, harmless_train, harmful_train):
     """Generate and save candidate directions."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_directions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'generate_directions'))
