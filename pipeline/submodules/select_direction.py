@@ -55,28 +55,32 @@ def refusal_score(
     return score
 
 def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None, refusal_score_suffix_toks=None):
-    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
+    """
+    Calculate refusal scores for a list of instructions.
 
+    Note: For OSS-20B, the channel prefix is baked into the chat template,
+    so refusal_score_suffix_toks will be None and no concatenation occurs.
+    The suffix mechanism is kept for backwards compatibility.
+    """
+    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
     refusal_scores = torch.zeros(len(instructions), device=model.device)
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
+        input_ids = tokenized_instructions.input_ids.to(model.device)
+        attention_mask = tokenized_instructions.attention_mask.to(model.device)
 
-        # If suffix tokens are provided, append them to each sequence in the batch
-        # This is useful for models like OSS that need channel prefixes before actual content
+        # Legacy suffix mechanism: append tokens if specified
+        # (Currently unused - OSS uses template approach, other models don't need it)
         if refusal_score_suffix_toks is not None:
-            suffix_tensor = torch.tensor([refusal_score_suffix_toks] * tokenized_instructions.input_ids.shape[0],
-                                        device=tokenized_instructions.input_ids.device)
-            tokenized_instructions.input_ids = torch.cat([tokenized_instructions.input_ids, suffix_tensor], dim=1)
-            # Extend attention mask as well
-            suffix_mask = torch.ones_like(suffix_tensor)
-            tokenized_instructions.attention_mask = torch.cat([tokenized_instructions.attention_mask, suffix_mask], dim=1)
+            suffix = torch.tensor([refusal_score_suffix_toks] * input_ids.shape[0],
+                                 device=model.device, dtype=torch.long)
+            input_ids = torch.cat([input_ids, suffix], dim=1)
+            suffix_mask = torch.ones_like(suffix)
+            attention_mask = torch.cat([attention_mask, suffix_mask], dim=1)
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            logits = model(
-                input_ids=tokenized_instructions.input_ids.to(model.device),
-                attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            ).logits                                                                          # (batch_size, inst_length, vocab)
+            logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
 
         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
 
