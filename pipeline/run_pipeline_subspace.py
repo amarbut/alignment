@@ -12,8 +12,10 @@ from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, ge
 
 from pipeline.submodules.generate_directions import generate_directions
 from pipeline.submodules.select_direction import select_direction, get_refusal_scores
+from pipeline.submodules.select_direction_auroc import select_direction_auroc
 from pipeline.submodules.generate_activations import get_activations
 from pipeline.submodules.cpca_functions import choose_best_cpca
+from pipeline.submodules.select_cpca_arditi import select_cpca_with_arditi
 from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
 from pipeline.submodules.evaluate_loss import evaluate_loss
 
@@ -27,7 +29,7 @@ def parse_arguments():
     parser.add_argument('--no_baseline', type=bool, default=False)
     parser.add_argument('--no_ablate', type=bool, default=False)
     parser.add_argument('--no_actadd', type=bool, default=False)
-    parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc"])
+    parser.add_argument('--method', type=str, default="arditi", help="direction/subspace pipeline to use", choices=["arditi", "cpca", "pls", "nonlinear", "arditi_auc", "arditi_auroc", "cpca_arditi"])
     parser.add_argument('--topk', type=int, default=1, help="Number of components to include in subspace; topk=1 is a single vector")
     parser.add_argument('--coeff', type=float, default=1.0, help="Scaling for actadd intervention")
     parser.add_argument('--tau', type=float, default=1.0, help="Scaling for ablation intervention")
@@ -157,6 +159,63 @@ def select_and_save_cpca(cfg, model_base, harmful_val, harmless_val, cands, topk
     return layer, pos, res["components_norm"][:,:topk], res["mu_b"]
 
 
+def select_and_save_direction_auroc(cfg, model_base, harmful_val, harmless_val, cands, topk, align):
+    """Select and save the direction using Fisher's Linear Discriminant criterion."""
+    if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction_fisher')):
+        os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction_fisher'))
+
+    pos, layer, direction = select_direction_auroc(
+        model_base,
+        harmful_val,
+        harmless_val,
+        cands[0],
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction_fisher"),
+        min_auroc_threshold=0.5,  # min Fisher score threshold
+        prune_layer_percentage=0.2
+    )
+
+    with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
+        json.dump({"pos": pos, "layer": layer, "method": "fisher"}, f, indent=4)
+
+    torch.save(direction, f'{cfg.artifact_path()}/direction.pt')
+
+    # Use zeros for mu_b (no centering for Fisher method)
+    mu_b = torch.zeros(direction.size(0))
+    torch.save(mu_b, f'{cfg.artifact_path()}/mu_b.pt')
+
+    return layer, pos, direction, mu_b
+
+
+def select_and_save_cpca_arditi(cfg, model_base, harmful_val, harmless_val, cands, topk, align, keep_var=0.999, eig_floor_frac=1e-3):
+    """Compute cPCA candidates and select using Arditi's empirical criteria."""
+    if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_cpca_arditi')):
+        os.makedirs(os.path.join(cfg.artifact_path(), 'select_cpca_arditi'))
+
+    # cands[0] = harmless_acts, cands[1] = harmful_acts
+    layer, pos, components, mu_b = select_cpca_with_arditi(
+        model_base,
+        harmful_val,
+        harmless_val,
+        harmful_acts=cands[1],  # [n_layer, n_pos, n_harmful, d_model]
+        harmless_acts=cands[0],  # [n_layer, n_pos, n_harmless, d_model]
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_cpca_arditi"),
+        topk=topk,
+        keep_var=keep_var,
+        eig_floor_frac=eig_floor_frac,
+        align=align
+    )
+
+    pos = pos - 5  # adjust position index to match other methods
+
+    with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
+        json.dump({"pos": pos, "layer": layer, "method": "cpca_arditi"}, f, indent=4)
+
+    torch.save(components, f'{cfg.artifact_path()}/direction.pt')
+    torch.save(mu_b, f'{cfg.artifact_path()}/mu_b.pt')
+
+    return layer, pos, components, mu_b
+
+
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, topk, coeff, tau, dataset=None):
     """Generate and save completions for a dataset."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), f'completions/k{topk}/a{coeff}/t{tau}')):
@@ -204,7 +263,15 @@ method_dict = {"arditi": {"candidate_loc": ["generate_directions/mean_diffs.pt"]
                "cpca": {"candidate_loc": ["generate_acts/hl_activations.pt", "generate_acts/hf_activations.pt"],
                         "generate_cands": generate_and_save_activations,
                         "select_dirs": select_and_save_cpca
-                       }
+                       },
+               "arditi_auroc": {"candidate_loc": ["generate_directions/mean_diffs.pt"],
+                                "generate_cands": generate_and_save_candidate_directions,
+                                "select_dirs": select_and_save_direction_auroc
+                               },
+               "cpca_arditi": {"candidate_loc": ["generate_acts/hl_activations.pt", "generate_acts/hf_activations.pt"],
+                               "generate_cands": generate_and_save_activations,
+                               "select_dirs": select_and_save_cpca_arditi
+                              }
               }
 
 
