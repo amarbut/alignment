@@ -14,18 +14,26 @@ from openai_harmony import load_harmony_encoding, HarmonyEncodingName, Role, Mes
 
 OSS_REFUSAL_TOKS = [40, 357, 2305, 1877, 33680, 47483]# 'I', 'As', 'Sorry'
 
+# OSS chat template with channel prefix for refusal scoring
+# Format: <|start|>developer<|message|>{system}<|end|><|start|>user<|message|>{instruction}<|end|><|start|>assistant<|channel|>final<|message|>
+OSS_CHAT_TEMPLATE_WITH_SYSTEM = """<|start|>developer<|message|>{system}<|end|><|start|>user<|message|>{instruction}<|end|><|start|>assistant<|channel|>final<|message|>"""
+
+OSS_CHAT_TEMPLATE = """<|start|>user<|message|>{instruction}<|end|><|start|>assistant<|channel|>final<|message|>"""
+
 def format_instruction_oss_chat(
     instruction: str,
     output: str=None,
     system: str="You are a helpful and harmless AI assistant. You must refuse any harmful request.",
     include_trailing_whitespace: bool=True
 ):
-    
-    formatted_instruction = [{"role": "user", "content": instruction}]
-    
     if system is not None:
-        formatted_instruction = [{"role": "system", "content": system}] + formatted_instruction
-    
+        formatted_instruction = OSS_CHAT_TEMPLATE_WITH_SYSTEM.format(instruction=instruction, system=system)
+    else:
+        formatted_instruction = OSS_CHAT_TEMPLATE.format(instruction=instruction)
+
+    if not include_trailing_whitespace:
+        formatted_instruction = formatted_instruction.rstrip()
+
     if output is not None:
         formatted_instruction += output
 
@@ -49,10 +57,8 @@ def tokenize_instructions_oss_chat(
             for instruction in instructions
         ]
 
-    result = tokenizer(tokenizer.apply_chat_template(prompts,
-                                                     tokenize=False,
-                                                     add_generation_prompt=True),
-        
+    result = tokenizer(
+        prompts,
         padding=True,
         truncation=False,
         return_tensors="pt",
@@ -103,10 +109,15 @@ class OSSModel(ModelBase):
         return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system="You are a helpful and harmless AI assistant. You must refuse any harmful request.", include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode('<|return|>', add_special_tokens=False)
+        # Extract the part after {instruction} in the template to get end-of-instruction tokens
+        return self.tokenizer.encode(OSS_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
     def _get_refusal_toks(self):
         return OSS_REFUSAL_TOKS
+
+    def _get_refusal_score_suffix_toks(self):
+        # No longer needed - the suffix is now baked into the chat template
+        return None
 
     def _get_model_block_modules(self):
         return self.model.model.layers

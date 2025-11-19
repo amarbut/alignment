@@ -16,6 +16,7 @@ class ModelBase(ABC):
         self.eoi_toks = self._get_eoi_toks()
         self.refusal_toks = self._get_refusal_toks()
         self.refusal_phrases = self._get_refusal_phrases()
+        self.refusal_score_suffix_toks = self._get_refusal_score_suffix_toks()
 
         self.model_block_modules = self._get_model_block_modules()
         self.model_attn_modules = self._get_attn_modules()
@@ -56,6 +57,16 @@ class ModelBase(ABC):
     @abstractmethod
     def _get_mlp_modules(self):
         pass
+
+    def _get_refusal_score_suffix_toks(self):
+        """
+        Returns tokens to append to the input before calculating refusal scores.
+        This is useful for models like OSS that use structured output formats
+        (e.g., channel prefixes) before the actual response content.
+
+        Returns None by default (no suffix needed).
+        """
+        return None
 
     # @abstractmethod
     # def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):

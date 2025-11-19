@@ -54,19 +54,33 @@ def refusal_score(
 
     return score
 
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None):
-    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
+def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32, tokenizer = None, refusal_score_suffix_toks=None):
+    """
+    Calculate refusal scores for a list of instructions.
 
+    Note: For OSS-20B, the channel prefix is baked into the chat template,
+    so refusal_score_suffix_toks will be None and no concatenation occurs.
+    The suffix mechanism is kept for backwards compatibility.
+    """
+    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
     refusal_scores = torch.zeros(len(instructions), device=model.device)
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
+        input_ids = tokenized_instructions.input_ids.to(model.device)
+        attention_mask = tokenized_instructions.attention_mask.to(model.device)
+
+        # Legacy suffix mechanism: append tokens if specified
+        # (Currently unused - OSS uses template approach, other models don't need it)
+        if refusal_score_suffix_toks is not None:
+            suffix = torch.tensor([refusal_score_suffix_toks] * input_ids.shape[0],
+                                 device=model.device, dtype=torch.long)
+            input_ids = torch.cat([input_ids, suffix], dim=1)
+            suffix_mask = torch.ones_like(suffix)
+            attention_mask = torch.cat([attention_mask, suffix_mask], dim=1)
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
-            logits = model(
-                input_ids=tokenized_instructions.input_ids.to(model.device),
-                attention_mask=tokenized_instructions.attention_mask.to(model.device),
-            ).logits                                                                          # (batch_size, inst_length, vocab)
+            logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
 
         refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
 
@@ -160,10 +174,10 @@ def select_direction(
     n_pos, n_layer, d_model = candidate_directions.shape
     print("harmful_length:", len(harmful_instructions))
     print("harmless_length:", len(harmless_instructions))
-    baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = model_base.tokenizer)
-    
+    baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = model_base.tokenizer, refusal_score_suffix_toks=model_base.refusal_score_suffix_toks)
+
     #print("baseline_refusal_scores_harmful:", baseline_refusal_scores_harmful)
-    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = model_base.tokenizer)
+    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size, tokenizer = model_base.tokenizer, refusal_score_suffix_toks=model_base.refusal_score_suffix_toks)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
@@ -212,7 +226,7 @@ def select_direction(
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_subspace_ablation_output_hook(ablation_dir, mu_b=mu_b, tau=tau)) for layer in range(model_base.model.config.num_hidden_layers)]
        
 
-            refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer)
+            refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer, refusal_score_suffix_toks=model_base.refusal_score_suffix_toks)
             ablation_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
 
     for source_pos in range(-n_pos, 0):
@@ -223,7 +237,7 @@ def select_direction(
             fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_subspace_input_pre_hook(refusal_vector, coeff=torch.tensor(+coeff)))]
             fwd_hooks = []
 
-            refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer)
+            refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size, tokenizer = model_base.tokenizer, refusal_score_suffix_toks=model_base.refusal_score_suffix_toks)
             steering_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
 
     plot_refusal_scores(
