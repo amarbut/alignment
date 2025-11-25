@@ -38,6 +38,7 @@ def test_expert_intervention():
 
         # Get hooks
         fwd_pre_hooks, fwd_hooks = get_expert_intervention_hooks(model_base, config)
+        
 
         # Generate completions
         completions = model_base.generate_completions(
@@ -51,7 +52,7 @@ def test_expert_intervention():
         # Print results
         for i, completion in enumerate(completions):
             print(f"\nPrompt {i+1}: {completion['prompt'][:60]}...")
-            print(f"Response: {completion['completion'][:100]}...")
+            print(f"Response: {completion['response'][:100]}...")
 
     print("\n" + "=" * 80)
     print("Test complete!")
