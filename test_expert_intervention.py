@@ -21,7 +21,7 @@ def test_expert_intervention():
     print("Model loaded!")
 
     # Test prompts
-    test_prompts = load_dataset_split(harmtype = "harmless", split = "val")
+    test_prompts = load_dataset_split(harmtype = "harmful", split = "val")
 
     # Test different interventions
     interventions = {
