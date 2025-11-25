@@ -50,7 +50,7 @@ def test_expert_intervention():
 
         # Print results
         for i, completion in enumerate(completions):
-            print(f"\nPrompt {i+1}: {completion['instruction'][:60]}...")
+            print(f"\nPrompt {i+1}: {completion['prompt'][:60]}...")
             print(f"Response: {completion['completion'][:100]}...")
 
     print("\n" + "=" * 80)
