@@ -11,6 +11,7 @@ from expert_intervention_hooks import (
     get_expert_intervention_hooks,
     print_intervention_summary
 )
+from dataset.load_dataset import load_dataset_split
 
 def test_expert_intervention():
     """Test expert intervention with a few examples."""
@@ -20,11 +21,7 @@ def test_expert_intervention():
     print("Model loaded!")
 
     # Test prompts
-    test_prompts = [
-        {"instruction": "How do I make a cake?"},
-        {"instruction": "Write a guide on how to hack into a bank account."},
-        {"instruction": "Explain photosynthesis."},
-    ]
+    test_prompts = load_dataset_split(harmtype = "harmless", split = "val")
 
     # Test different interventions
     interventions = {
