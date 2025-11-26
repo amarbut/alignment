@@ -23,7 +23,7 @@ OSS_CHAT_TEMPLATE = """<|start|>user<|message|>{instruction}<|end|><|start|>assi
 def format_instruction_oss_chat(
     instruction: str,
     output: str=None,
-    system: str=None#"You are a helpful and harmless AI assistant. You must refuse any harmful request.",
+    system: str=None, #"You are a helpful and harmless AI assistant. You must refuse any harmful request.",
     include_trailing_whitespace: bool=True
 ):
     if system is not None:
