@@ -118,16 +118,18 @@ def print_intervention_summary(config: ExpertInterventionConfig):
 
 # Pre-configured experiments
 def get_harmful_expert_suppression_config():
+    """Suppress experts that activate more for harmful prompts (L10E5 and L13E0)."""
     config = ExpertInterventionConfig()
     config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
-    config.suppress_expert(layer=13, expert_id=1, strength=-10.0)
+    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
     return config
 
 
 def get_harmful_expert_forcing_config():
+    """Force experts that activate more for harmful prompts (L10E5 and L13E0)."""
     config = ExpertInterventionConfig()
     config.force_expert(layer=10, expert_id=5, strength=10.0)
-    config.force_expert(layer=13, expert_id=1, strength=10.0)
+    config.force_expert(layer=13, expert_id=0, strength=10.0)
     return config
 
 
@@ -142,12 +144,112 @@ def get_layer10_expert5_only_config(intervention_type='force'):
     return config
 
 
-def get_layer13_expert1_only_config(intervention_type='force'):
+def get_layer13_expert0_only_config(intervention_type='force'):
+    """Intervention for layer 13, expert 0 only."""
     config = ExpertInterventionConfig()
     if intervention_type == 'force':
-        config.force_expert(layer=13, expert_id=1, strength=10.0)
+        config.force_expert(layer=13, expert_id=0, strength=10.0)
     elif intervention_type == 'suppress':
-        config.suppress_expert(layer=13, expert_id=1, strength=-10.0)
+        config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
     elif intervention_type == 'soft':
-        config.soft_bias_expert(layer=13, expert_id=1, strength=2.0)
+        config.soft_bias_expert(layer=13, expert_id=0, strength=2.0)
+    return config
+
+
+# ==============================================================================
+# PAIRED INTERVENTIONS: Refusal vs Response Induction
+# ==============================================================================
+# Based on analysis showing:
+# - Layer 10, Expert 5: 30% more likely in harmful prompts (harmful-preferred)
+# - Layer 10, Expert 10: 13% more likely in harmless prompts (harmless-preferred)
+# - Layer 13, Expert 0: 25% more likely in harmful prompts (harmful-preferred)
+# - Layer 13, Expert 21: 15% more likely in harmless prompts (harmless-preferred)
+
+def get_layer10_refusal_induction_config():
+    """
+    Layer 10 refusal induction: Force harmless-preferred expert, suppress harmful-preferred expert.
+
+    Force expert 10 (harmless-preferred) and suppress expert 5 (harmful-preferred).
+    Hypothesis: Should increase refusal of harmful requests.
+    """
+    config = ExpertInterventionConfig()
+    config.force_expert(layer=10, expert_id=10, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
+    return config
+
+
+def get_layer10_response_induction_config():
+    """
+    Layer 10 response induction: Force harmful-preferred expert, suppress harmless-preferred expert.
+
+    Force expert 5 (harmful-preferred) and suppress expert 10 (harmless-preferred).
+    Hypothesis: Should decrease refusal of harmful requests (more jailbreaks).
+    """
+    config = ExpertInterventionConfig()
+    config.force_expert(layer=10, expert_id=5, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
+    return config
+
+
+def get_layer13_refusal_induction_config():
+    """
+    Layer 13 refusal induction: Force harmless-preferred expert, suppress harmful-preferred expert.
+
+    Force expert 21 (harmless-preferred) and suppress expert 0 (harmful-preferred).
+    Hypothesis: Should increase refusal of harmful requests.
+    """
+    config = ExpertInterventionConfig()
+    config.force_expert(layer=13, expert_id=21, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
+    return config
+
+
+def get_layer13_response_induction_config():
+    """
+    Layer 13 response induction: Force harmful-preferred expert, suppress harmless-preferred expert.
+
+    Force expert 0 (harmful-preferred) and suppress expert 21 (harmless-preferred).
+    Hypothesis: Should decrease refusal of harmful requests (more jailbreaks).
+    """
+    config = ExpertInterventionConfig()
+    config.force_expert(layer=13, expert_id=0, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
+    return config
+
+
+def get_combined_refusal_induction_config():
+    """
+    Combined refusal induction across both layers.
+
+    Layer 10: Force E10, suppress E5
+    Layer 13: Force E21, suppress E0
+
+    Hypothesis: Should strongly increase refusal of harmful requests.
+    """
+    config = ExpertInterventionConfig()
+    # Layer 10
+    config.force_expert(layer=10, expert_id=10, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
+    # Layer 13
+    config.force_expert(layer=13, expert_id=21, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
+    return config
+
+
+def get_combined_response_induction_config():
+    """
+    Combined response induction across both layers.
+
+    Layer 10: Force E5, suppress E10
+    Layer 13: Force E0, suppress E21
+
+    Hypothesis: Should strongly decrease refusal of harmful requests (more jailbreaks).
+    """
+    config = ExpertInterventionConfig()
+    # Layer 10
+    config.force_expert(layer=10, expert_id=5, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
+    # Layer 13
+    config.force_expert(layer=13, expert_id=0, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
     return config
