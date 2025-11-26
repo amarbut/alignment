@@ -21,13 +21,13 @@ from pipeline.run_pipeline import (
     evaluate_completions_and_save_results_for_dataset
 )
 
-from expert_intervention_hooks import (
+from expert_intervention_hooks_v3 import (
     ExpertInterventionConfig,
-    get_expert_intervention_hooks,
+    apply_expert_interventions,
+    remove_expert_interventions,
     print_intervention_summary,
     get_harmful_expert_suppression_config,
     get_harmful_expert_forcing_config,
-    get_harmful_expert_soft_bias_config,
     get_layer10_expert5_only_config,
     get_layer13_expert1_only_config,
 )
@@ -73,10 +73,6 @@ def get_experiment_configs():
             get_harmful_expert_forcing_config(),
             "Force harmful-associated experts (L10E5, L13E1)"
         ),
-        'soft_bias_harmful': (
-            get_harmful_expert_soft_bias_config(),
-            "Soft bias towards harmful experts (L10E5, L13E1)"
-        ),
         'suppress_l10e5': (
             get_layer10_expert5_only_config('suppress'),
             "Suppress Layer 10, Expert 5 only"
@@ -92,14 +88,6 @@ def get_experiment_configs():
         'force_l13e1': (
             get_layer13_expert1_only_config('force'),
             "Force Layer 13, Expert 1 only"
-        ),
-        'soft_l10e5': (
-            get_layer10_expert5_only_config('soft'),
-            "Soft bias Layer 10, Expert 5 only"
-        ),
-        'soft_l13e1': (
-            get_layer13_expert1_only_config('soft'),
-            "Soft bias Layer 13, Expert 1 only"
         ),
     }
     return experiments
@@ -126,8 +114,10 @@ def run_experiment(model_base, config, experiment_name, description, datasets, o
     # Print intervention summary
     print_intervention_summary(config)
 
-    # Get hooks for this intervention
-    fwd_pre_hooks, fwd_hooks = get_expert_intervention_hooks(model_base, config)
+    # Apply intervention by modifying router biases
+    print("\nApplying router bias modifications...")
+    original_biases = apply_expert_interventions(model_base, config)
+    print(f"Modified {len(original_biases)} layers")
 
     # Create experiment output directory
     exp_dir = Path(output_dir) / experiment_name
@@ -152,12 +142,12 @@ def run_experiment(model_base, config, experiment_name, description, datasets, o
         dataset = load_dataset(dataset_name)
         print(f"Loaded {len(dataset)} examples")
 
-        # Generate completions
+        # Generate completions (router biases already modified)
         print("Generating completions...")
         completions = model_base.generate_completions(
             dataset,
-            fwd_pre_hooks=fwd_pre_hooks,
-            fwd_hooks=fwd_hooks,
+            fwd_pre_hooks=[],
+            fwd_hooks=[],
             max_new_tokens=max_new_tokens
         )
 
@@ -191,6 +181,10 @@ def run_experiment(model_base, config, experiment_name, description, datasets, o
                 if isinstance(results, dict) and 'average' in results:
                     avg_score = results['average']
                     print(f"  {method}: {avg_score:.3f}")
+
+    # Clean up: restore original router biases
+    print("\nRestoring original router biases...")
+    remove_expert_interventions(model_base, original_biases)
 
 
 def summarize_all_results(output_dir, experiments, datasets):
