@@ -217,7 +217,7 @@ def run_paired_intervention_pipeline(
 
     # Get intervention configs
     all_configs = get_paired_intervention_configs(skip_combined=skip_combined, threshold=threshold)
-    configs_to_run = filter_configs_by_layers(all_configs, layers, threshold)
+    configs_to_run = filter_configs_by_layers(all_configs, layers)
 
     if skip_baseline and 'baseline' in configs_to_run:
         del configs_to_run['baseline']
