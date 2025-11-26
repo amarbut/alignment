@@ -100,7 +100,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def get_paired_intervention_configs(skip_combined: bool = False, threshold) -> Dict[str, ExpertInterventionConfig]:
+def get_paired_intervention_configs(skip_combined: bool = False, threshold = 0) -> Dict[str, ExpertInterventionConfig]:
     """
     Get all paired intervention configurations.
 
@@ -131,8 +131,7 @@ def get_paired_intervention_configs(skip_combined: bool = False, threshold) -> D
 
 def filter_configs_by_layers(
     all_configs: Dict[str, ExpertInterventionConfig],
-    layers: list,
-    threshold
+    layers: list
 ) -> Dict[str, ExpertInterventionConfig]:
     """
     Filter configs based on which layers to test.
@@ -180,7 +179,8 @@ def run_paired_intervention_pipeline(
     n_test: int = 100,
     skip_baseline: bool = False,
     skip_combined: bool = False,
-    layers: list = ['all']
+    layers: list = ['all'],
+    threshold = 0
 ):
     """
     Run the paired intervention evaluation pipeline.
@@ -214,8 +214,8 @@ def run_paired_intervention_pipeline(
     print("Model loaded!")
 
     # Get intervention configs
-    all_configs = get_paired_intervention_configs(skip_combined=skip_combined)
-    configs_to_run = filter_configs_by_layers(all_configs, layers)
+    all_configs = get_paired_intervention_configs(skip_combined=skip_combined, threshold)
+    configs_to_run = filter_configs_by_layers(all_configs, layers, threshold)
 
     if skip_baseline and 'baseline' in configs_to_run:
         del configs_to_run['baseline']
