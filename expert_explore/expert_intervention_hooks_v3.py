@@ -173,8 +173,8 @@ def get_layer10_refusal_induction_config():
     Hypothesis: Should increase refusal of harmful requests.
     """
     config = ExpertInterventionConfig()
-    config.force_expert(layer=10, expert_id=10, strength=10.0)
-    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
+    config.force_expert(layer=10, expert_id=5, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
     return config
 
 
@@ -186,8 +186,8 @@ def get_layer10_response_induction_config():
     Hypothesis: Should decrease refusal of harmful requests (more jailbreaks).
     """
     config = ExpertInterventionConfig()
-    config.force_expert(layer=10, expert_id=5, strength=10.0)
-    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
+    config.force_expert(layer=10, expert_id=10, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
     return config
 
 
@@ -199,8 +199,8 @@ def get_layer13_refusal_induction_config():
     Hypothesis: Should increase refusal of harmful requests.
     """
     config = ExpertInterventionConfig()
-    config.force_expert(layer=13, expert_id=21, strength=10.0)
-    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
+    config.force_expert(layer=13, expert_id=0, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
     return config
 
 
@@ -212,8 +212,8 @@ def get_layer13_response_induction_config():
     Hypothesis: Should decrease refusal of harmful requests (more jailbreaks).
     """
     config = ExpertInterventionConfig()
-    config.force_expert(layer=13, expert_id=0, strength=10.0)
-    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
+    config.force_expert(layer=13, expert_id=21, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
     return config
 
 
@@ -228,11 +228,11 @@ def get_combined_refusal_induction_config():
     """
     config = ExpertInterventionConfig()
     # Layer 10
-    config.force_expert(layer=10, expert_id=10, strength=10.0)
-    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
+    config.force_expert(layer=10, expert_id=5, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
     # Layer 13
-    config.force_expert(layer=13, expert_id=21, strength=10.0)
-    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
+    config.force_expert(layer=13, expert_id=0, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
     return config
 
 
@@ -247,9 +247,9 @@ def get_combined_response_induction_config():
     """
     config = ExpertInterventionConfig()
     # Layer 10
-    config.force_expert(layer=10, expert_id=5, strength=10.0)
-    config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
+    config.force_expert(layer=10, expert_id=10, strength=10.0)
+    config.suppress_expert(layer=10, expert_id=5, strength=-10.0)
     # Layer 13
-    config.force_expert(layer=13, expert_id=0, strength=10.0)
-    config.suppress_expert(layer=13, expert_id=21, strength=-10.0)
+    config.force_expert(layer=13, expert_id=21, strength=10.0)
+    config.suppress_expert(layer=13, expert_id=0, strength=-10.0)
     return config
