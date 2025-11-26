@@ -202,6 +202,30 @@ expert_interventions = [[3, 23],
                         [24,12],
                        ]
 
+expert_diff = [[2.71,3.18],
+                [3.78,2.65],
+                [4.2,3.12],
+                [3.03,2.7],
+                [5.21,3.21],
+                [9.93,2.9],
+                [3.92,2.47],
+                [2.99,2.5],
+                [2.92,1.78],
+                [11.81,5.02],
+                [29.27,13.34],
+                [7.55,6.75],
+                [14.11,6.75],
+                [23.08,15.64],
+                [8.13,4.77],
+                [16.25,8.86],
+                [5.05,2.97],
+                [6.65,12.31],
+                [8.12,5.54],
+                [10.04,5.22],
+                [12.58,4.87],
+               ]
+
+
 def get_all_layers_refusal_induction_config():
     """
     For all layers: Force top harmful-preferred expert, suppress harmless-preferred expert.
@@ -224,6 +248,34 @@ def get_all_layers_response_induction_config():
     for layer, exp in enumerate(expert_interventions):
         config.force_expert(layer=layer, expert_id=exp[1], strength=10.0)
         config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
+    return config
+
+def get_select_experts_refusal_induction_config(threshold):
+    """
+    If difference between harmful & harmless experts > threshold: Force top harmful-preferred expert, suppress harmless-preferred expert.
+
+    Hypothesis: Should increase refusal of harmless requests.
+    """
+    config = ExpertInterventionConfig()
+    for layer, exp in enumerate(expert_interventions):
+        if expert_diff[layer][0] > threshold:
+            config.force_expert(layer=layer, expert_id=exp[0], strength=10.0)
+        if expert_diff[layer][1] > threshold:
+            config.suppress_expert(layer=layer, expert_id=exp[1], strength=-10.0)
+    return config
+
+def get_select_experts_response_induction_config(threshold):
+    """
+    If difference between harmful & harmless experts > threshold: Force harmless-preferred expert, suppress harmful-preferred expert.
+
+    Hypothesis: Should decrease refusal of harmful requests.
+    """
+    config = ExpertInterventionConfig()
+    for layer, exp in enumerate(expert_interventions):
+        if expert_diff[layer][1] > threshold:
+            config.force_expert(layer=layer, expert_id=exp[1], strength=10.0)
+        if expert_diff[layer][0] > threshold:
+            config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
     return config
 
 

@@ -91,10 +91,16 @@ def parse_arguments():
         default=['all'],
         help='Which layers to test: all, all_layers, l10, l13'
     )
+    parser.add_argument(
+        '--threshold',
+        type=float,
+        default=0,
+        help='For select experts, use experts with diff > threshold'
+    )
     return parser.parse_args()
 
 
-def get_paired_intervention_configs(skip_combined: bool = False) -> Dict[str, ExpertInterventionConfig]:
+def get_paired_intervention_configs(skip_combined: bool = False, threshold) -> Dict[str, ExpertInterventionConfig]:
     """
     Get all paired intervention configurations.
 
@@ -111,7 +117,9 @@ def get_paired_intervention_configs(skip_combined: bool = False) -> Dict[str, Ex
         'l13_refusal_induction': get_layer13_refusal_induction_config(),
         'l13_response_induction': get_layer13_response_induction_config(),
         'all_layers_refusal': get_all_layers_refusal_induction_config(),
-        'all_layers_response': get_all_layers_response_induction_config()
+        'all_layers_response': get_all_layers_response_induction_config(),
+        'select_experts_refusal': get_select_experts_refusal_induction_config(threshold),
+        'select_experts_response': get_select_experts_response_induction_config(threshold)
     }
 
     if not skip_combined:
@@ -123,7 +131,8 @@ def get_paired_intervention_configs(skip_combined: bool = False) -> Dict[str, Ex
 
 def filter_configs_by_layers(
     all_configs: Dict[str, ExpertInterventionConfig],
-    layers: list
+    layers: list,
+    threshold
 ) -> Dict[str, ExpertInterventionConfig]:
     """
     Filter configs based on which layers to test.
@@ -143,6 +152,10 @@ def filter_configs_by_layers(
     if 'all_layers' in layers:
         filtered['all_layers_refusal'] = all_configs['all_layers_refusal']
         filtered['all_layers_response'] = all_configs['all_layers_response']
+
+    if 'select_experts' in layers:
+        filtered['select_experts_refusal'] = all_configs['select_experts_refusal']
+        filtered['select_experts_response'] = all_configs['select_experts_response']
 
     if 'l10' in layers:
         filtered['l10_refusal_induction'] = all_configs['l10_refusal_induction']
@@ -335,5 +348,6 @@ if __name__ == "__main__":
         n_test=args.n_test,
         skip_baseline=args.skip_baseline,
         skip_combined=args.skip_combined,
-        layers=args.layers
+        layers=args.layers,
+        threshold=args.threshold
     )
