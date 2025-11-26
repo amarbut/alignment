@@ -48,7 +48,9 @@ from expert_explore.expert_intervention_hooks_v3 import (
     get_combined_refusal_induction_config,
     get_combined_response_induction_config,
     get_all_layers_response_induction_config,
-    get_all_layers_refusal_induction_config
+    get_all_layers_refusal_induction_config,
+    get_select_experts_refusal_induction_config,
+    get_select_experts_response_induction_config
 )
 
 from pipeline.run_pipeline_subspace import (
