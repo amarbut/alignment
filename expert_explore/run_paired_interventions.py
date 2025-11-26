@@ -214,7 +214,7 @@ def run_paired_intervention_pipeline(
     print("Model loaded!")
 
     # Get intervention configs
-    all_configs = get_paired_intervention_configs(skip_combined=skip_combined, threshold)
+    all_configs = get_paired_intervention_configs(skip_combined=skip_combined, threshold=threshold)
     configs_to_run = filter_configs_by_layers(all_configs, layers, threshold)
 
     if skip_baseline and 'baseline' in configs_to_run:
