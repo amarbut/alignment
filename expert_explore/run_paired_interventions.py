@@ -46,7 +46,9 @@ from expert_explore.expert_intervention_hooks_v3 import (
     get_layer13_refusal_induction_config,
     get_layer13_response_induction_config,
     get_combined_refusal_induction_config,
-    get_combined_response_induction_config
+    get_combined_response_induction_config,
+    get_all_layers_response_induction_config,
+    get_all_layers_refusal_induction_config
 )
 
 from pipeline.run_pipeline_subspace import (
@@ -87,7 +89,7 @@ def parse_arguments():
         type=str,
         nargs='+',
         default=['all'],
-        help='Which layers to test: all, l10, l13'
+        help='Which layers to test: all, all_layers, l10, l13'
     )
     return parser.parse_args()
 
@@ -108,6 +110,8 @@ def get_paired_intervention_configs(skip_combined: bool = False) -> Dict[str, Ex
         'l10_response_induction': get_layer10_response_induction_config(),
         'l13_refusal_induction': get_layer13_refusal_induction_config(),
         'l13_response_induction': get_layer13_response_induction_config(),
+        'all_layers_refusal': get_all_layers_refusal_induction_config(),
+        'all_layers_response': get_all_layers_response_induction_config()
     }
 
     if not skip_combined:
@@ -135,6 +139,10 @@ def filter_configs_by_layers(
         return all_configs
 
     filtered = {'baseline': all_configs['baseline']}
+
+    if 'all_layers' in layers:
+        filtered['all_layers_refusal'] = all_configs['all_layers_refusal']
+        filtered['all_layers_response'] = all_configs['all_layers_response']
 
     if 'l10' in layers:
         filtered['l10_refusal_induction'] = all_configs['l10_refusal_induction']

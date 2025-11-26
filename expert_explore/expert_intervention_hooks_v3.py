@@ -177,6 +177,55 @@ def get_layer10_refusal_induction_config():
     config.suppress_expert(layer=10, expert_id=10, strength=-10.0)
     return config
 
+# list out experts per layer with top % difference between harmful & harmless
+# for each layer we have [top harmful, top harmless]
+expert_interventions = [[3, 23],
+                        [28,13],
+                        [29,8],
+                        [0,11],
+                        [18,6],
+                        [6,31],
+                        [7,3],
+                        [13,16],
+                        [24,13],
+                        [13,8],
+                        [5,10],
+                        [20,9],
+                        [3,21],
+                        [0,21],
+                        [9,6],
+                        [31,13],
+                        [31,27],
+                        [4,11],
+                        [18,1],
+                        [7,29],
+                        [24,12],
+                       ]
+
+def get_all_layers_refusal_induction_config():
+    """
+    For all layers: Force top harmful-preferred expert, suppress harmless-preferred expert.
+
+    Hypothesis: Should increase refusal of harmless requests.
+    """
+    config = ExpertInterventionConfig()
+    for layer, exp in enumerate(expert_interventions):
+        config.force_expert(layer=layer, expert_id=exp[0], strength=10.0)
+        config.suppress_expert(layer=layer, expert_id=exp[1], strength=-10.0)
+    return config
+
+def get_all_layers_response_induction_config():
+    """
+    For all layers: Force harmless-preferred expert, suppress harmful-preferred expert.
+
+    Hypothesis: Should decrease refusal of harmful requests.
+    """
+    config = ExpertInterventionConfig()
+    for layer, exp in enumerate(expert_interventions):
+        config.force_expert(layer=layer, expert_id=exp[1], strength=10.0)
+        config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
+    return config
+
 
 def get_layer10_response_induction_config():
     """
