@@ -277,7 +277,7 @@ def get_select_experts_response_induction_config(threshold):
     """
     config = ExpertInterventionConfig()
     for layer in expert_diffs:
-        for exp in exper_diffs[layer]:
+        for exp in expert_diffs[layer]:
             if exp[1] > 0:
                 if exp[1] > threshold:
                     config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
