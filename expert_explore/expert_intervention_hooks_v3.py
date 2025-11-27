@@ -261,12 +261,12 @@ def get_select_experts_refusal_induction_config(threshold):
     """
     config = ExpertInterventionConfig()
     for layer in expert_diffs:
-        for exp in layer:
-            if expert_diffs[layer][exp][1] > 0:
-                if expert_diffs[layer][exp][1] > threshold:
-                    config.force_expert(layer=layer, expert_id=expert_diffs[layer][exp][0], strength=10.0)
-                elif expert_diffs[layer][exp][1] < -threshold:
-                    config.suppress_expert(layer=layer, expert_id=expert_diffs[layer][exp][0], strength=-10.0)
+        for exp in expert_diffs[layer]:
+            if exp[1] > 0:
+                if exp[1] > threshold:
+                    config.force_expert(layer=layer, expert_id=exp[0], strength=10.0)
+                elif exp[1] < -threshold:
+                    config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
     return config
 
 def get_select_experts_response_induction_config(threshold):
@@ -277,12 +277,12 @@ def get_select_experts_response_induction_config(threshold):
     """
     config = ExpertInterventionConfig()
     for layer in expert_diffs:
-        for exp in layer:
-            if expert_diffs[layer][exp][1] > 0:
-                if expert_diffs[layer][exp][1] > threshold:
-                    config.suppress_expert(layer=layer, expert_id=expert_diffs[layer][exp][0], strength=-10.0)
-                elif expert_diffs[layer][exp][1] < -threshold:
-                    config.force_expert(layer=layer, expert_id=expert_diffs[layer][exp][0], strength=10.0)
+        for exp in exper_diffs[layer]:
+            if exp[1] > 0:
+                if exp[1] > threshold:
+                    config.suppress_expert(layer=layer, expert_id=exp[0], strength=-10.0)
+                elif exp[1] < -threshold:
+                    config.force_expert(layer=layer, expert_id=exp[0], strength=10.0)
     return config
 
 # select experts using manual lookup of top harmful and harmless only
