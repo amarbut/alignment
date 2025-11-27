@@ -6,6 +6,7 @@ BEFORE the forward pass. This ensures routing structures remain consistent.
 """
 
 import torch
+import json
 from typing import Dict, Tuple
 
 class ExpertInterventionConfig:
