@@ -262,10 +262,10 @@ def get_select_experts_refusal_induction_config(threshold):
     config = ExpertInterventionConfig()
     for layer in expert_diffs:
         for exp in expert_diffs[layer]:
-            if exp[1] > 0:
-                if exp[1] > threshold:
+            if abs(exp[1]) > threshold:
+                if exp[1] > 0:
                     config.force_expert(layer=int(layer), expert_id=exp[0], strength=10.0)
-                elif exp[1] < -threshold:
+                elif exp[1] < 0:
                     config.suppress_expert(layer=int(layer), expert_id=exp[0], strength=-10.0)
     return config
 
@@ -278,10 +278,10 @@ def get_select_experts_response_induction_config(threshold):
     config = ExpertInterventionConfig()
     for layer in expert_diffs:
         for exp in expert_diffs[layer]:
-            if exp[1] > 0:
-                if exp[1] > threshold:
+            if abs(exp[1]) > threshold:
+                if exp[1] > 0:
                     config.suppress_expert(layer=int(layer), expert_id=exp[0], strength=-10.0)
-                elif exp[1] < -threshold:
+                elif exp[1] < 0:
                     config.force_expert(layer=int(layer), expert_id=exp[0], strength=10.0)
     return config
 
