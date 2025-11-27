@@ -121,12 +121,10 @@ def get_paired_intervention_configs(skip_combined: bool = False, threshold = 0) 
         'all_layers_refusal': get_all_layers_refusal_induction_config(),
         'all_layers_response': get_all_layers_response_induction_config(),
         'select_experts_refusal': get_select_experts_refusal_induction_config(threshold),
-        'select_experts_response': get_select_experts_response_induction_config(threshold)
+        'select_experts_response': get_select_experts_response_induction_config(threshold),
+        'combined_refusal_induction': get_combined_refusal_induction_config(),
+        'combined_response_induction': get_combined_response_induction_config()
     }
-
-    if not skip_combined:
-        configs['combined_refusal_induction'] = get_combined_refusal_induction_config()
-        configs['combined_response_induction'] = get_combined_response_induction_config()
 
     return configs
 
@@ -166,12 +164,9 @@ def filter_configs_by_layers(
         filtered['l13_refusal_induction'] = all_configs['l13_refusal_induction']
         filtered['l13_response_induction'] = all_configs['l13_response_induction']
 
-    # Add combined if both layers are selected and it exists
-    if 'l10' in layers and 'l13' in layers:
-        if 'combined_refusal_induction' in all_configs:
-            filtered['combined_refusal_induction'] = all_configs['combined_refusal_induction']
-        if 'combined_response_induction' in all_configs:
-            filtered['combined_response_induction'] = all_configs['combined_response_induction']
+    if 'combined' in layers:
+        filtered['combined_refusal_induction'] = all_configs['combined_refusal_induction']
+        filtered['combined_response_induction'] = all_configs['combined_response_induction']
 
     return filtered
 
