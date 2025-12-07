@@ -9,6 +9,7 @@ representing transition frequency across a dataset of prompts.
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from pathlib import Path
 from collections import defaultdict
 import argparse
@@ -20,65 +21,113 @@ def load_routing_data(json_path):
         return json.load(f)
 
 
-def build_transition_matrices(routing_data, use_top_k=True, filter_by_label=None):
+def build_transition_matrices(routing_data, use_top_k=True, separate_labels=False):
     """
     Build transition matrices counting expert-to-expert transitions.
 
     Args:
         routing_data: Dictionary containing routing information
         use_top_k: If True, use all top-k experts; if False, use only top-1
-        filter_by_label: If specified ('harmful' or 'harmless'), only use those prompts
+        separate_labels: If True, return separate matrices for harmful/harmless
 
     Returns:
-        Dictionary mapping (layer_from, layer_to) -> transition_matrix
-        where transition_matrix[i, j] = count of transitions from expert i to expert j
+        If separate_labels=False:
+            transition_counts: Dictionary mapping (layer_from, layer_to) -> transition_matrix
+            num_layers: Number of layers
+            num_experts: Number of experts per layer
+        If separate_labels=True:
+            harmful_counts, harmless_counts, num_layers, num_experts
     """
     num_layers = routing_data['num_layers']
     num_experts = routing_data['num_experts']
 
-    # Initialize transition matrices for each layer pair
-    # transition_counts[(layer_i, layer_i+1)][expert_from, expert_to] = count
-    transition_counts = {}
-    for layer_i in range(num_layers - 1):
-        transition_counts[(layer_i, layer_i + 1)] = np.zeros((num_experts, num_experts))
+    def process_results(results):
+        """Process a list of results and return transition counts."""
+        transition_counts = {}
+        for layer_i in range(num_layers - 1):
+            transition_counts[(layer_i, layer_i + 1)] = np.zeros((num_experts, num_experts))
 
-    # Combine harmful and harmless results
-    all_results = []
-    if filter_by_label == 'harmful' or filter_by_label is None:
+        # Process each prompt
+        for result in results:
+            layer_routing = result['layer_routing']
+
+            # For each consecutive layer pair
+            for layer_i in range(num_layers - 1):
+                layer_from_key = f"layer_{layer_i}"
+                layer_to_key = f"layer_{layer_i + 1}"
+
+                if layer_from_key not in layer_routing or layer_to_key not in layer_routing:
+                    continue
+
+                # Get expert selections for both layers
+                if use_top_k:
+                    # Use all top-k experts (usually k=4)
+                    experts_from = layer_routing[layer_from_key]['top_k_experts']
+                    experts_to = layer_routing[layer_to_key]['top_k_experts']
+                else:
+                    # Use only the top expert
+                    experts_from = [[e] for e in layer_routing[layer_from_key]['top_expert']]
+                    experts_to = [[e] for e in layer_routing[layer_to_key]['top_expert']]
+
+                # For each token position
+                for token_experts_from, token_experts_to in zip(experts_from, experts_to):
+                    # Count all transitions between active experts
+                    for expert_from in token_experts_from:
+                        for expert_to in token_experts_to:
+                            transition_counts[(layer_i, layer_i + 1)][expert_from, expert_to] += 1
+
+        return transition_counts
+
+    if separate_labels:
+        # Build separate matrices for harmful and harmless
+        harmful_results = routing_data.get('harmful_results', [])
+        harmless_results = routing_data.get('harmless_results', [])
+
+        harmful_counts = process_results(harmful_results)
+        harmless_counts = process_results(harmless_results)
+
+        return harmful_counts, harmless_counts, num_layers, num_experts
+    else:
+        # Build combined matrix
+        all_results = []
         all_results.extend(routing_data.get('harmful_results', []))
-    if filter_by_label == 'harmless' or filter_by_label is None:
         all_results.extend(routing_data.get('harmless_results', []))
 
-    # Process each prompt
-    for result in all_results:
-        layer_routing = result['layer_routing']
+        transition_counts = process_results(all_results)
+        return transition_counts, num_layers, num_experts
 
-        # For each consecutive layer pair
-        for layer_i in range(num_layers - 1):
-            layer_from_key = f"layer_{layer_i}"
-            layer_to_key = f"layer_{layer_i + 1}"
 
-            if layer_from_key not in layer_routing or layer_to_key not in layer_routing:
-                continue
+def apply_edge_filtering(transition_counts, top_k_edges=None, min_threshold=0):
+    """
+    Filter edges based on transition frequency.
 
-            # Get expert selections for both layers
-            if use_top_k:
-                # Use all top-k experts (usually k=4)
-                experts_from = layer_routing[layer_from_key]['top_k_experts']
-                experts_to = layer_routing[layer_to_key]['top_k_experts']
-            else:
-                # Use only the top expert
-                experts_from = [[e] for e in layer_routing[layer_from_key]['top_expert']]
-                experts_to = [[e] for e in layer_routing[layer_to_key]['top_expert']]
+    Args:
+        transition_counts: Dictionary of transition matrices
+        top_k_edges: If specified, keep only top K edges per layer pair
+        min_threshold: Minimum count to keep an edge
 
-            # For each token position
-            for token_experts_from, token_experts_to in zip(experts_from, experts_to):
-                # Count all transitions between active experts
-                for expert_from in token_experts_from:
-                    for expert_to in token_experts_to:
-                        transition_counts[(layer_i, layer_i + 1)][expert_from, expert_to] += 1
+    Returns:
+        Filtered transition_counts dictionary
+    """
+    filtered_counts = {}
 
-    return transition_counts, num_layers, num_experts
+    for layer_pair, matrix in transition_counts.items():
+        filtered_matrix = matrix.copy()
+
+        if top_k_edges is not None and top_k_edges > 0:
+            # Keep only top K edges
+            flat_values = matrix.flatten()
+            if len(flat_values) > top_k_edges:
+                threshold = np.partition(flat_values, -top_k_edges)[-top_k_edges]
+                filtered_matrix[matrix < threshold] = 0
+
+        if min_threshold > 0:
+            # Apply minimum threshold
+            filtered_matrix[filtered_matrix < min_threshold] = 0
+
+        filtered_counts[layer_pair] = filtered_matrix
+
+    return filtered_counts
 
 
 def visualize_expert_routing(
@@ -91,15 +140,17 @@ def visualize_expert_routing(
     min_line_width=0.1,
     edge_alpha=0.6,
     layer_height_exponent=0.5,
-    min_edge_threshold=0,
     figsize=(20, 12),
-    title="Expert Routing Visualization"
+    title="Expert Routing Visualization",
+    harmful_counts=None,
+    harmless_counts=None,
+    exclude_last_n_layers=3
 ):
     """
     Create a node-link diagram showing expert routing patterns.
 
     Args:
-        transition_counts: Dictionary of transition matrices
+        transition_counts: Dictionary of transition matrices (used if harmful/harmless not provided)
         num_layers: Number of layers in the model
         num_experts: Number of experts per layer
         output_path: Path to save the figure (if None, displays instead)
@@ -108,17 +159,37 @@ def visualize_expert_routing(
         min_line_width: Minimum line width for edges
         edge_alpha: Transparency of edges
         layer_height_exponent: Controls vertical spacing of nodes
-        min_edge_threshold: Only draw edges with count >= this threshold
         figsize: Figure size as (width, height)
         title: Title for the plot
+        harmful_counts: Separate transition matrix for harmful prompts
+        harmless_counts: Separate transition matrix for harmless prompts
+        exclude_last_n_layers: Number of non-expert layers to exclude from end
     """
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Find maximum transition count for normalization
-    max_transitions = max(
-        matrix.max() for matrix in transition_counts.values()
-        if matrix.max() > 0
-    )
+    # Determine which layers to show
+    effective_num_layers = num_layers - exclude_last_n_layers
+
+    # Determine if we're using separate harmful/harmless visualization
+    use_separate_colors = harmful_counts is not None and harmless_counts is not None
+
+    if use_separate_colors:
+        # Find maximum transition count across both for normalization
+        max_harmful = max(
+            matrix.max() for layer_pair, matrix in harmful_counts.items()
+            if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
+        ) if harmful_counts else 0
+        max_harmless = max(
+            matrix.max() for layer_pair, matrix in harmless_counts.items()
+            if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
+        ) if harmless_counts else 0
+        max_transitions = max(max_harmful, max_harmless)
+    else:
+        # Find maximum transition count for normalization
+        max_transitions = max(
+            matrix.max() for layer_pair, matrix in transition_counts.items()
+            if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
+        )
 
     if max_transitions == 0:
         print("Warning: No transitions found in the data")
@@ -140,44 +211,95 @@ def visualize_expert_routing(
         return min_line_width + (max_line_width - min_line_width) * normalized
 
     # Draw edges between layers
-    for layer_i in range(num_layers - 1):
+    for layer_i in range(effective_num_layers - 1):
         x_from = layer_i * x_per_layer
         x_to = (layer_i + 1) * x_per_layer
 
-        transition_matrix = transition_counts.get((layer_i, layer_i + 1))
-        if transition_matrix is None:
-            continue
+        if use_separate_colors:
+            # Draw harmful edges in red
+            harmful_matrix = harmful_counts.get((layer_i, layer_i + 1))
+            if harmful_matrix is not None:
+                for expert_from in range(num_experts):
+                    for expert_to in range(num_experts):
+                        count = harmful_matrix[expert_from, expert_to]
+                        if count <= 0:
+                            continue
 
-        # Draw edges
-        for expert_from in range(num_experts):
-            for expert_to in range(num_experts):
-                count = transition_matrix[expert_from, expert_to]
+                        width = edge_width(count)
+                        y_from = node_vertical_position(expert_from, num_experts)
+                        y_to = node_vertical_position(expert_to, num_experts)
 
-                if count < min_edge_threshold:
-                    continue
+                        # Red for harmful
+                        intensity = min(1.0, count / max_transitions)
+                        color = (intensity, 0, 0)  # Red
 
-                width = edge_width(count)
-                if width <= 0:
-                    continue
+                        ax.plot(
+                            [x_from, x_to],
+                            [y_from, y_to],
+                            lw=width,
+                            color=color,
+                            alpha=edge_alpha,
+                            zorder=1
+                        )
 
-                y_from = node_vertical_position(expert_from, num_experts)
-                y_to = node_vertical_position(expert_to, num_experts)
+            # Draw harmless edges in blue
+            harmless_matrix = harmless_counts.get((layer_i, layer_i + 1))
+            if harmless_matrix is not None:
+                for expert_from in range(num_experts):
+                    for expert_to in range(num_experts):
+                        count = harmless_matrix[expert_from, expert_to]
+                        if count <= 0:
+                            continue
 
-                # Color based on frequency (darker = more frequent)
-                color_intensity = count / max_transitions
-                color = plt.cm.viridis(color_intensity)
+                        width = edge_width(count)
+                        y_from = node_vertical_position(expert_from, num_experts)
+                        y_to = node_vertical_position(expert_to, num_experts)
 
-                ax.plot(
-                    [x_from, x_to],
-                    [y_from, y_to],
-                    lw=width,
-                    color=color,
-                    alpha=edge_alpha,
-                    zorder=1
-                )
+                        # Blue for harmless
+                        intensity = min(1.0, count / max_transitions)
+                        color = (0, 0, intensity)  # Blue
+
+                        ax.plot(
+                            [x_from, x_to],
+                            [y_from, y_to],
+                            lw=width,
+                            color=color,
+                            alpha=edge_alpha,
+                            zorder=1
+                        )
+
+        else:
+            # Single color mode
+            transition_matrix = transition_counts.get((layer_i, layer_i + 1))
+            if transition_matrix is None:
+                continue
+
+            # Draw edges
+            for expert_from in range(num_experts):
+                for expert_to in range(num_experts):
+                    count = transition_matrix[expert_from, expert_to]
+                    if count <= 0:
+                        continue
+
+                    width = edge_width(count)
+                    y_from = node_vertical_position(expert_from, num_experts)
+                    y_to = node_vertical_position(expert_to, num_experts)
+
+                    # Color based on frequency (darker = more frequent)
+                    color_intensity = count / max_transitions
+                    color = plt.cm.viridis(color_intensity)
+
+                    ax.plot(
+                        [x_from, x_to],
+                        [y_from, y_to],
+                        lw=width,
+                        color=color,
+                        alpha=edge_alpha,
+                        zorder=1
+                    )
 
     # Draw nodes
-    for layer_i in range(num_layers):
+    for layer_i in range(effective_num_layers):
         x = layer_i * x_per_layer
         for expert_i in range(num_experts):
             y = node_vertical_position(expert_i, num_experts)
@@ -192,7 +314,7 @@ def visualize_expert_routing(
             )
 
     # Add layer labels
-    for layer_i in range(num_layers):
+    for layer_i in range(effective_num_layers):
         x = layer_i * x_per_layer
         y_max = node_vertical_position(num_experts - 1, num_experts)
         ax.text(
@@ -204,14 +326,24 @@ def visualize_expert_routing(
             fontweight='bold'
         )
 
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(
-        cmap=plt.cm.viridis,
-        norm=plt.Normalize(vmin=0, vmax=max_transitions)
-    )
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, fraction=0.02, pad=0.02)
-    cbar.set_label('Transition Frequency', fontsize=12)
+    # Add legend or colorbar depending on mode
+    if use_separate_colors:
+        # Create custom legend for harmful/harmless
+        legend_elements = [
+            Line2D([0], [0], color='red', lw=2, label='Harmful prompts'),
+            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts'),
+            Line2D([0], [0], color='purple', lw=2, label='Both (overlapping)')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=12)
+    else:
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(
+            cmap=plt.cm.viridis,
+            norm=plt.Normalize(vmin=0, vmax=max_transitions)
+        )
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, fraction=0.02, pad=0.02)
+        cbar.set_label('Transition Frequency', fontsize=12)
 
     # Clean up axes
     ax.spines['top'].set_visible(False)
@@ -234,18 +366,23 @@ def visualize_expert_routing(
     return fig, ax
 
 
-def print_statistics(transition_counts, num_layers, num_experts):
+def print_statistics(transition_counts, num_layers, num_experts, label="", exclude_last_n_layers=3):
     """Print statistics about the expert routing patterns."""
+    effective_num_layers = num_layers - exclude_last_n_layers
+
     print("\n" + "="*60)
-    print("Expert Routing Statistics")
+    print(f"Expert Routing Statistics{' - ' + label if label else ''}")
     print("="*60)
 
-    for layer_i in range(num_layers - 1):
+    for layer_i in range(effective_num_layers - 1):
         matrix = transition_counts.get((layer_i, layer_i + 1))
         if matrix is None:
             continue
 
         total_transitions = matrix.sum()
+        if total_transitions == 0:
+            continue
+
         num_nonzero = np.count_nonzero(matrix)
         max_transition = matrix.max()
 
@@ -283,16 +420,14 @@ def main():
     )
     parser.add_argument(
         '--use-top-k',
-        action='store_true',
+        type=lambda x: str(x).lower() == 'true',
         default=True,
-        help='Use all top-k experts instead of just top-1'
+        help='Use all top-k experts instead of just top-1 (default: True)'
     )
     parser.add_argument(
-        '--filter-label',
-        type=str,
-        choices=['harmful', 'harmless', None],
-        default=None,
-        help='Filter by prompt label (default: use all)'
+        '--separate-colors',
+        action='store_true',
+        help='Use different colors for harmful (red) and harmless (blue) paths'
     )
     parser.add_argument(
         '--min-threshold',
@@ -301,10 +436,22 @@ def main():
         help='Minimum transition count to display an edge'
     )
     parser.add_argument(
+        '--top-k-edges',
+        type=int,
+        default=None,
+        help='Keep only top K edges per layer pair (alternative to min-threshold)'
+    )
+    parser.add_argument(
         '--max-line-width',
         type=float,
         default=3.0,
         help='Maximum line width for edges'
+    )
+    parser.add_argument(
+        '--exclude-last-n-layers',
+        type=int,
+        default=3,
+        help='Number of non-expert layers to exclude from end (default: 3)'
     )
     parser.add_argument(
         '--figsize',
@@ -320,33 +467,78 @@ def main():
     print(f"Loading routing data from {args.input}...")
     routing_data = load_routing_data(args.input)
 
+    print(f"Using top-k experts: {args.use_top_k}")
+    print(f"Separate colors for harmful/harmless: {args.separate_colors}")
+    print(f"Excluding last {args.exclude_last_n_layers} layers")
+
     # Build transition matrices
     print("Building transition matrices...")
-    transition_counts, num_layers, num_experts = build_transition_matrices(
-        routing_data,
-        use_top_k=args.use_top_k,
-        filter_by_label=args.filter_label
-    )
+    if args.separate_colors:
+        harmful_counts, harmless_counts, num_layers, num_experts = build_transition_matrices(
+            routing_data,
+            use_top_k=args.use_top_k,
+            separate_labels=True
+        )
 
-    # Print statistics
-    print_statistics(transition_counts, num_layers, num_experts)
+        # Apply filtering
+        harmful_counts = apply_edge_filtering(
+            harmful_counts,
+            top_k_edges=args.top_k_edges,
+            min_threshold=args.min_threshold
+        )
+        harmless_counts = apply_edge_filtering(
+            harmless_counts,
+            top_k_edges=args.top_k_edges,
+            min_threshold=args.min_threshold
+        )
 
-    # Create visualization
-    print("\nCreating visualization...")
-    title = "Expert Routing Visualization"
-    if args.filter_label:
-        title += f" ({args.filter_label.capitalize()} Prompts)"
+        # Print statistics
+        print_statistics(harmful_counts, num_layers, num_experts, "Harmful", args.exclude_last_n_layers)
+        print_statistics(harmless_counts, num_layers, num_experts, "Harmless", args.exclude_last_n_layers)
 
-    visualize_expert_routing(
-        transition_counts,
-        num_layers,
-        num_experts,
-        output_path=args.output,
-        min_edge_threshold=args.min_threshold,
-        max_line_width=args.max_line_width,
-        figsize=tuple(args.figsize),
-        title=title
-    )
+        # Create visualization
+        print("\nCreating visualization...")
+        visualize_expert_routing(
+            None,
+            num_layers,
+            num_experts,
+            output_path=args.output,
+            max_line_width=args.max_line_width,
+            figsize=tuple(args.figsize),
+            title="Expert Routing: Harmful (Red) vs Harmless (Blue)",
+            harmful_counts=harmful_counts,
+            harmless_counts=harmless_counts,
+            exclude_last_n_layers=args.exclude_last_n_layers
+        )
+    else:
+        transition_counts, num_layers, num_experts = build_transition_matrices(
+            routing_data,
+            use_top_k=args.use_top_k,
+            separate_labels=False
+        )
+
+        # Apply filtering
+        transition_counts = apply_edge_filtering(
+            transition_counts,
+            top_k_edges=args.top_k_edges,
+            min_threshold=args.min_threshold
+        )
+
+        # Print statistics
+        print_statistics(transition_counts, num_layers, num_experts, "", args.exclude_last_n_layers)
+
+        # Create visualization
+        print("\nCreating visualization...")
+        visualize_expert_routing(
+            transition_counts,
+            num_layers,
+            num_experts,
+            output_path=args.output,
+            max_line_width=args.max_line_width,
+            figsize=tuple(args.figsize),
+            title="Expert Routing Visualization",
+            exclude_last_n_layers=args.exclude_last_n_layers
+        )
 
     print("\nDone!")
 
