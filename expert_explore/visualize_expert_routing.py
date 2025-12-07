@@ -174,7 +174,7 @@ def visualize_expert_routing(
     use_separate_colors = harmful_counts is not None and harmless_counts is not None
 
     if use_separate_colors:
-        # Find maximum transition count across both for normalization
+        # Normalize each dataset independently so they each use the full color range
         max_harmful = max(
             matrix.max() for layer_pair, matrix in harmful_counts.items()
             if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
@@ -183,7 +183,8 @@ def visualize_expert_routing(
             matrix.max() for layer_pair, matrix in harmless_counts.items()
             if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
         ) if harmless_counts else 0
-        max_transitions = max(max_harmful, max_harmless)
+        # Don't combine them - use separate scales
+        max_transitions = None  # Not used in separate color mode
     else:
         # Find maximum transition count for normalization
         max_transitions = max(
@@ -191,7 +192,7 @@ def visualize_expert_routing(
             if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
         )
 
-    if max_transitions == 0:
+    if not use_separate_colors and max_transitions == 0:
         print("Warning: No transitions found in the data")
         return
 
@@ -203,11 +204,11 @@ def visualize_expert_routing(
         else:
             return 0
 
-    def edge_width(count):
+    def edge_width(count, max_count):
         """Calculate edge width based on transition count."""
-        if count <= 0:
+        if count <= 0 or max_count == 0:
             return 0
-        normalized = count / max_transitions
+        normalized = count / max_count
         return min_line_width + (max_line_width - min_line_width) * normalized
 
     # Draw edges between layers
@@ -216,21 +217,21 @@ def visualize_expert_routing(
         x_to = (layer_i + 1) * x_per_layer
 
         if use_separate_colors:
-            # Draw harmful edges in red
+            # Draw harmful edges in red (normalized independently)
             harmful_matrix = harmful_counts.get((layer_i, layer_i + 1))
-            if harmful_matrix is not None:
+            if harmful_matrix is not None and max_harmful > 0:
                 for expert_from in range(num_experts):
                     for expert_to in range(num_experts):
                         count = harmful_matrix[expert_from, expert_to]
                         if count <= 0:
                             continue
 
-                        width = edge_width(count)
+                        width = edge_width(count, max_harmful)
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Red for harmful
-                        intensity = min(1.0, count / max_transitions)
+                        # Red for harmful - normalize within harmful dataset only
+                        intensity = min(1.0, count / max_harmful)
                         color = (intensity, 0, 0)  # Red
 
                         ax.plot(
@@ -242,21 +243,21 @@ def visualize_expert_routing(
                             zorder=1
                         )
 
-            # Draw harmless edges in blue
+            # Draw harmless edges in blue (normalized independently)
             harmless_matrix = harmless_counts.get((layer_i, layer_i + 1))
-            if harmless_matrix is not None:
+            if harmless_matrix is not None and max_harmless > 0:
                 for expert_from in range(num_experts):
                     for expert_to in range(num_experts):
                         count = harmless_matrix[expert_from, expert_to]
                         if count <= 0:
                             continue
 
-                        width = edge_width(count)
+                        width = edge_width(count, max_harmless)
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Blue for harmless
-                        intensity = min(1.0, count / max_transitions)
+                        # Blue for harmless - normalize within harmless dataset only
+                        intensity = min(1.0, count / max_harmless)
                         color = (0, 0, intensity)  # Blue
 
                         ax.plot(
@@ -281,7 +282,7 @@ def visualize_expert_routing(
                     if count <= 0:
                         continue
 
-                    width = edge_width(count)
+                    width = edge_width(count, max_transitions)
                     y_from = node_vertical_position(expert_from, num_experts)
                     y_to = node_vertical_position(expert_to, num_experts)
 
@@ -330,11 +331,22 @@ def visualize_expert_routing(
     if use_separate_colors:
         # Create custom legend for harmful/harmless
         legend_elements = [
-            Line2D([0], [0], color='red', lw=2, label='Harmful prompts'),
-            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts'),
+            Line2D([0], [0], color='red', lw=2, label='Harmful prompts (normalized)'),
+            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts (normalized)'),
             Line2D([0], [0], color='purple', lw=2, label='Both (overlapping)')
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=12)
+        legend = ax.legend(handles=legend_elements, loc='upper right', fontsize=12)
+        # Add note about independent normalization
+        ax.text(
+            0.98, 0.02,
+            'Note: Each dataset normalized independently\n(darker = more frequent within that dataset)',
+            transform=ax.transAxes,
+            ha='right',
+            va='bottom',
+            fontsize=9,
+            style='italic',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3)
+        )
     else:
         # Add colorbar
         sm = plt.cm.ScalarMappable(
