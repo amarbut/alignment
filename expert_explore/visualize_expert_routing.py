@@ -97,6 +97,76 @@ def build_transition_matrices(routing_data, use_top_k=True, separate_labels=Fals
         return transition_counts, num_layers, num_experts
 
 
+def compute_normalized_differences(harmful_counts, harmless_counts, num_layers, num_experts):
+    """
+    Compute normalized frequency differences between harmful and harmless.
+
+    Returns difference matrices where positive = more common in harmful,
+    negative = more common in harmless.
+    """
+    diff_counts = {}
+
+    for layer_i in range(num_layers - 1):
+        layer_pair = (layer_i, layer_i + 1)
+
+        harmful_matrix = harmful_counts.get(layer_pair, np.zeros((num_experts, num_experts)))
+        harmless_matrix = harmless_counts.get(layer_pair, np.zeros((num_experts, num_experts)))
+
+        # Normalize each matrix by its total
+        harmful_total = harmful_matrix.sum()
+        harmless_total = harmless_matrix.sum()
+
+        harmful_norm = harmful_matrix / harmful_total if harmful_total > 0 else harmful_matrix
+        harmless_norm = harmless_matrix / harmless_total if harmless_total > 0 else harmless_matrix
+
+        # Compute difference (positive = more harmful, negative = more harmless)
+        diff_counts[layer_pair] = harmful_norm - harmless_norm
+
+    return diff_counts
+
+
+def identify_different_edges(harmful_counts, harmless_counts, num_experts, threshold=2.0):
+    """
+    Identify edges that are significantly different between datasets.
+
+    Returns dictionaries marking edges as 'more_harmful', 'more_harmless', or 'similar'.
+    Uses ratio-based threshold: if one is >threshold times the other, it's different.
+    """
+    edge_labels = {}
+
+    for layer_pair in harmful_counts.keys():
+        harmful_matrix = harmful_counts.get(layer_pair, np.zeros((num_experts, num_experts)))
+        harmless_matrix = harmless_counts.get(layer_pair, np.zeros((num_experts, num_experts)))
+
+        # Normalize each
+        harmful_total = harmful_matrix.sum()
+        harmless_total = harmless_matrix.sum()
+        harmful_norm = harmful_matrix / harmful_total if harmful_total > 0 else harmful_matrix
+        harmless_norm = harmless_matrix / harmless_total if harmless_total > 0 else harmless_matrix
+
+        labels = np.zeros(harmful_matrix.shape, dtype=int)  # 0=similar, 1=more_harmful, -1=more_harmless
+
+        for i in range(num_experts):
+            for j in range(num_experts):
+                h_val = harmful_norm[i, j]
+                hl_val = harmless_norm[i, j]
+
+                # Skip if both are essentially zero
+                if h_val < 1e-6 and hl_val < 1e-6:
+                    continue
+
+                # Check if one is much larger than the other
+                if h_val > threshold * hl_val and h_val > 1e-6:
+                    labels[i, j] = 1  # More common in harmful
+                elif hl_val > threshold * h_val and hl_val > 1e-6:
+                    labels[i, j] = -1  # More common in harmless
+                # else: remains 0 (similar)
+
+        edge_labels[layer_pair] = labels
+
+    return edge_labels
+
+
 def apply_edge_filtering(transition_counts, top_k_edges=None, top_percent_edges=None, min_threshold=0, verbose=False):
     """
     Filter edges based on transition frequency.
@@ -419,6 +489,317 @@ def visualize_expert_routing(
     return fig, ax
 
 
+def visualize_difference_mode(
+    diff_counts,
+    num_layers,
+    num_experts,
+    output_path=None,
+    x_per_layer=1.5,
+    max_line_width=3.0,
+    min_line_width=0.1,
+    edge_alpha=0.6,
+    layer_height_exponent=0.5,
+    figsize=(20, 12),
+    exclude_last_n_layers=3
+):
+    """
+    Visualize normalized frequency differences between harmful and harmless.
+    Red = more common in harmful, Blue = more common in harmless.
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    effective_num_layers = num_layers - exclude_last_n_layers
+
+    # Find max absolute difference for normalization
+    max_diff = max(
+        abs(matrix).max() for layer_pair, matrix in diff_counts.items()
+        if layer_pair[0] < effective_num_layers - 1
+    )
+
+    if max_diff == 0:
+        print("Warning: No differences found")
+        return
+
+    bwr_cmap = plt.cm.bwr
+
+    def node_vertical_position(i_node, n_nodes):
+        y_offset = i_node - 0.5 * (n_nodes - 1)
+        if n_nodes > 1:
+            return y_offset / (n_nodes - 1) ** layer_height_exponent
+        else:
+            return 0
+
+    def edge_width(diff_val):
+        if abs(diff_val) <= 0:
+            return 0
+        normalized = abs(diff_val) / max_diff
+        return min_line_width + (max_line_width - min_line_width) * normalized
+
+    # Draw edges
+    for layer_i in range(effective_num_layers - 1):
+        x_from = layer_i * x_per_layer
+        x_to = (layer_i + 1) * x_per_layer
+
+        diff_matrix = diff_counts.get((layer_i, layer_i + 1))
+        if diff_matrix is None:
+            continue
+
+        for expert_from in range(num_experts):
+            for expert_to in range(num_experts):
+                diff_val = diff_matrix[expert_from, expert_to]
+
+                if abs(diff_val) < 1e-6:
+                    continue
+
+                width = edge_width(diff_val)
+                y_from = node_vertical_position(expert_from, num_experts)
+                y_to = node_vertical_position(expert_to, num_experts)
+
+                # Map difference to color: positive (harmful) = red, negative (harmless) = blue
+                # Normalize diff_val to [-1, 1] range, then map to bwr colormap
+                normalized_diff = diff_val / max_diff  # Range: [-1, 1]
+                color_value = 0.5 + 0.5 * normalized_diff  # Map to [0, 1]
+                color = bwr_cmap(color_value)
+
+                ax.plot(
+                    [x_from, x_to],
+                    [y_from, y_to],
+                    lw=width,
+                    color=color,
+                    alpha=edge_alpha,
+                    zorder=1
+                )
+
+    # Draw nodes
+    for layer_i in range(effective_num_layers):
+        x = layer_i * x_per_layer
+        for expert_i in range(num_experts):
+            y = node_vertical_position(expert_i, num_experts)
+            ax.scatter(
+                x, y,
+                s=30,
+                c='black',
+                marker='o',
+                zorder=10,
+                edgecolors='white',
+                linewidths=0.5
+            )
+
+    # Add layer labels
+    for layer_i in range(effective_num_layers):
+        x = layer_i * x_per_layer
+        y_max = node_vertical_position(num_experts - 1, num_experts)
+        ax.text(
+            x, y_max + 0.15,
+            f'Layer {layer_i}',
+            ha='center',
+            va='bottom',
+            fontsize=10,
+            fontweight='bold'
+        )
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(
+        cmap=bwr_cmap,
+        norm=plt.Normalize(vmin=-max_diff, vmax=max_diff)
+    )
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, fraction=0.02, pad=0.02)
+    cbar.set_label('Normalized Frequency Difference\n(Red=More Harmful, Blue=More Harmless)', fontsize=12)
+
+    # Clean up axes
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    ax.set_title('Expert Routing Differences: Harmful vs Harmless', fontsize=14, fontweight='bold', pad=20)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"Saved visualization to {output_path}")
+    else:
+        plt.show()
+
+    return fig, ax
+
+
+def visualize_side_by_side(
+    harmful_counts,
+    harmless_counts,
+    num_layers,
+    num_experts,
+    output_path=None,
+    highlight_differences=False,
+    difference_threshold=2.0,
+    x_per_layer=1.5,
+    max_line_width=3.0,
+    min_line_width=0.1,
+    edge_alpha=0.6,
+    layer_height_exponent=0.5,
+    figsize=(30, 12),
+    exclude_last_n_layers=3
+):
+    """
+    Create side-by-side visualizations of harmful and harmless routing.
+    Optionally highlight paths that differ significantly between the two.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+    effective_num_layers = num_layers - exclude_last_n_layers
+
+    # Get max values for normalization
+    max_harmful = max(
+        matrix.max() for layer_pair, matrix in harmful_counts.items()
+        if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
+    ) if harmful_counts else 0
+    max_harmless = max(
+        matrix.max() for layer_pair, matrix in harmless_counts.items()
+        if layer_pair[0] < effective_num_layers - 1 and matrix.max() > 0
+    ) if harmless_counts else 0
+
+    # Identify different edges if requested
+    edge_labels = None
+    if highlight_differences:
+        edge_labels = identify_different_edges(harmful_counts, harmless_counts, num_experts, difference_threshold)
+
+    def draw_routing_subplot(ax, counts, max_count, color_name, edge_labels_dict=None, show_which='all'):
+        """Draw routing for one dataset."""
+        bwr_cmap = plt.cm.bwr
+
+        def node_vertical_position(i_node, n_nodes):
+            y_offset = i_node - 0.5 * (n_nodes - 1)
+            if n_nodes > 1:
+                return y_offset / (n_nodes - 1) ** layer_height_exponent
+            else:
+                return 0
+
+        def edge_width(count):
+            if count <= 0 or max_count == 0:
+                return 0
+            normalized = count / max_count
+            return min_line_width + (max_line_width - min_line_width) * normalized
+
+        # Draw edges
+        for layer_i in range(effective_num_layers - 1):
+            x_from = layer_i * x_per_layer
+            x_to = (layer_i + 1) * x_per_layer
+
+            matrix = counts.get((layer_i, layer_i + 1))
+            if matrix is None:
+                continue
+
+            labels = edge_labels_dict.get((layer_i, layer_i + 1)) if edge_labels_dict else None
+
+            for expert_from in range(num_experts):
+                for expert_to in range(num_experts):
+                    count = matrix[expert_from, expert_to]
+                    if count <= 0:
+                        continue
+
+                    # Check if this edge should be highlighted
+                    is_different = False
+                    alpha = edge_alpha
+
+                    if labels is not None:
+                        label = labels[expert_from, expert_to]
+                        if show_which == 'different' and label == 0:
+                            # Skip similar edges
+                            continue
+                        elif show_which == 'all':
+                            # Highlight different edges
+                            if (color_name == 'red' and label == 1) or (color_name == 'blue' and label == -1):
+                                is_different = True
+                                alpha = 0.9  # More opaque for different paths
+
+                    width = edge_width(count)
+                    y_from = node_vertical_position(expert_from, num_experts)
+                    y_to = node_vertical_position(expert_to, num_experts)
+
+                    # Choose color
+                    intensity = min(1.0, count / max_count)
+                    if color_name == 'red':
+                        color_value = 0.6 + 0.4 * intensity
+                    else:  # blue
+                        color_value = 0.4 - 0.4 * intensity
+                    color = bwr_cmap(color_value)
+
+                    # If highlighting and edge is different, make it brighter
+                    if is_different:
+                        width *= 1.5  # Make different edges thicker
+
+                    ax.plot(
+                        [x_from, x_to],
+                        [y_from, y_to],
+                        lw=width,
+                        color=color,
+                        alpha=alpha,
+                        zorder=2 if is_different else 1
+                    )
+
+        # Draw nodes
+        for layer_i in range(effective_num_layers):
+            x = layer_i * x_per_layer
+            for expert_i in range(num_experts):
+                y = node_vertical_position(expert_i, num_experts)
+                ax.scatter(
+                    x, y,
+                    s=30,
+                    c='black',
+                    marker='o',
+                    zorder=10,
+                    edgecolors='white',
+                    linewidths=0.5
+                )
+
+        # Add layer labels
+        for layer_i in range(effective_num_layers):
+            x = layer_i * x_per_layer
+            y_max = node_vertical_position(num_experts - 1, num_experts)
+            ax.text(
+                x, y_max + 0.15,
+                f'Layer {layer_i}',
+                ha='center',
+                va='bottom',
+                fontsize=10,
+                fontweight='bold'
+            )
+
+        # Clean up axes
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    # Draw both subplots
+    draw_routing_subplot(ax1, harmful_counts, max_harmful, 'red', edge_labels, 'all')
+    ax1.set_title('Harmful Prompts', fontsize=14, fontweight='bold', pad=20)
+
+    draw_routing_subplot(ax2, harmless_counts, max_harmless, 'blue', edge_labels, 'all')
+    ax2.set_title('Harmless Prompts', fontsize=14, fontweight='bold', pad=20)
+
+    if highlight_differences:
+        fig.suptitle('Expert Routing Side-by-Side (Different Paths Highlighted)',
+                     fontsize=16, fontweight='bold', y=0.98)
+    else:
+        fig.suptitle('Expert Routing Side-by-Side Comparison',
+                     fontsize=16, fontweight='bold', y=0.98)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"Saved visualization to {output_path}")
+    else:
+        plt.show()
+
+    return fig, (ax1, ax2)
+
+
 def print_statistics(transition_counts, num_layers, num_experts, label="", exclude_last_n_layers=3):
     """Print statistics about the expert routing patterns."""
     effective_num_layers = num_layers - exclude_last_n_layers
@@ -480,7 +861,28 @@ def main():
     parser.add_argument(
         '--separate-colors',
         action='store_true',
-        help='Use different colors for harmful (red) and harmless (blue) paths'
+        help='Use different colors for harmful (red) and harmless (blue) paths (overlaid)'
+    )
+    parser.add_argument(
+        '--diff-mode',
+        action='store_true',
+        help='Show normalized frequency differences (red=more harmful, blue=more harmless)'
+    )
+    parser.add_argument(
+        '--side-by-side',
+        action='store_true',
+        help='Show harmful and harmless routing side-by-side'
+    )
+    parser.add_argument(
+        '--highlight-differences',
+        action='store_true',
+        help='In side-by-side mode, highlight paths that differ significantly (requires --side-by-side)'
+    )
+    parser.add_argument(
+        '--difference-threshold',
+        type=float,
+        default=2.0,
+        help='Threshold for highlighting differences: edge is different if one frequency > threshold * other (default: 2.0)'
     )
     parser.add_argument(
         '--min-threshold',
@@ -527,12 +929,22 @@ def main():
     routing_data = load_routing_data(args.input)
 
     print(f"Using top-k experts: {args.use_top_k}")
-    print(f"Separate colors for harmful/harmless: {args.separate_colors}")
     print(f"Excluding last {args.exclude_last_n_layers} layers")
+
+    # Determine visualization mode
+    if args.diff_mode:
+        print("Mode: Difference visualization")
+    elif args.side_by_side:
+        print(f"Mode: Side-by-side comparison (highlight differences: {args.highlight_differences})")
+    elif args.separate_colors:
+        print("Mode: Overlaid separate colors")
+    else:
+        print("Mode: Combined visualization")
 
     # Build transition matrices
     print("Building transition matrices...")
-    if args.separate_colors:
+    # For all comparison modes, we need separate harmful/harmless data
+    if args.diff_mode or args.side_by_side or args.separate_colors:
         harmful_counts, harmless_counts, num_layers, num_experts = build_transition_matrices(
             routing_data,
             use_top_k=args.use_top_k,
@@ -564,20 +976,51 @@ def main():
         print_statistics(harmful_counts, num_layers, num_experts, "Harmful", args.exclude_last_n_layers)
         print_statistics(harmless_counts, num_layers, num_experts, "Harmless", args.exclude_last_n_layers)
 
-        # Create visualization
+        # Create visualization based on mode
         print("\nCreating visualization...")
-        visualize_expert_routing(
-            None,
-            num_layers,
-            num_experts,
-            output_path=args.output,
-            max_line_width=args.max_line_width,
-            figsize=tuple(args.figsize),
-            title="Expert Routing: Harmful (Red) vs Harmless (Blue)",
-            harmful_counts=harmful_counts,
-            harmless_counts=harmless_counts,
-            exclude_last_n_layers=args.exclude_last_n_layers
-        )
+
+        if args.diff_mode:
+            # Compute normalized differences
+            diff_counts = compute_normalized_differences(harmful_counts, harmless_counts, num_layers, num_experts)
+            visualize_difference_mode(
+                diff_counts,
+                num_layers,
+                num_experts,
+                output_path=args.output,
+                max_line_width=args.max_line_width,
+                figsize=tuple(args.figsize),
+                exclude_last_n_layers=args.exclude_last_n_layers
+            )
+
+        elif args.side_by_side:
+            # Side-by-side comparison
+            visualize_side_by_side(
+                harmful_counts,
+                harmless_counts,
+                num_layers,
+                num_experts,
+                output_path=args.output,
+                highlight_differences=args.highlight_differences,
+                difference_threshold=args.difference_threshold,
+                max_line_width=args.max_line_width,
+                figsize=(30, 12) if args.figsize == [20, 12] else tuple(args.figsize),
+                exclude_last_n_layers=args.exclude_last_n_layers
+            )
+
+        else:
+            # Original overlaid visualization
+            visualize_expert_routing(
+                None,
+                num_layers,
+                num_experts,
+                output_path=args.output,
+                max_line_width=args.max_line_width,
+                figsize=tuple(args.figsize),
+                title="Expert Routing: Harmful (Red) vs Harmless (Blue)",
+                harmful_counts=harmful_counts,
+                harmless_counts=harmless_counts,
+                exclude_last_n_layers=args.exclude_last_n_layers
+            )
     else:
         transition_counts, num_layers, num_experts = build_transition_matrices(
             routing_data,
