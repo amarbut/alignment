@@ -248,10 +248,9 @@ def visualize_expert_routing(
         x_to = (layer_i + 1) * x_per_layer
 
         if use_separate_colors:
-            # Use colormaps that stay visible at low intensities
-            # Map intensity from 0.3 to 1.0 range to avoid fading to white or black
-            harmful_cmap = plt.cm.Reds
-            harmless_cmap = plt.cm.Blues
+            # Use the two halves of the bwr (blue-white-red) colormap for vibrant colors
+            # bwr: 0.0=dark blue, 0.5=white, 1.0=dark red
+            bwr_cmap = plt.cm.bwr
 
             # Draw harmful edges in red (normalized independently)
             harmful_matrix = harmful_counts.get((layer_i, layer_i + 1))
@@ -266,10 +265,11 @@ def visualize_expert_routing(
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Red for harmful - map to range [0.4, 1.0] to stay visible
+                        # Red for harmful - use red half of bwr (0.5 to 1.0)
+                        # Map: low intensity -> 0.6 (light red), high intensity -> 1.0 (dark red)
                         intensity = min(1.0, count / max_harmful)
-                        color_value = 0.4 + 0.6 * intensity  # Maps to [0.4, 1.0]
-                        color = harmful_cmap(color_value)
+                        color_value = 0.6 + 0.4 * intensity  # Maps to [0.6, 1.0]
+                        color = bwr_cmap(color_value)
 
                         ax.plot(
                             [x_from, x_to],
@@ -293,10 +293,11 @@ def visualize_expert_routing(
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Blue for harmless - map to range [0.4, 1.0] to stay visible
+                        # Blue for harmless - use blue half of bwr (0.0 to 0.5)
+                        # Map: low intensity -> 0.4 (light blue), high intensity -> 0.0 (dark blue)
                         intensity = min(1.0, count / max_harmless)
-                        color_value = 0.4 + 0.6 * intensity  # Maps to [0.4, 1.0]
-                        color = harmless_cmap(color_value)
+                        color_value = 0.4 - 0.4 * intensity  # Maps to [0.4, 0.0]
+                        color = bwr_cmap(color_value)
 
                         ax.plot(
                             [x_from, x_to],
