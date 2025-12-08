@@ -248,6 +248,11 @@ def visualize_expert_routing(
         x_to = (layer_i + 1) * x_per_layer
 
         if use_separate_colors:
+            # Use colormaps that stay visible at low intensities
+            # Map intensity from 0.3 to 1.0 range to avoid fading to white or black
+            harmful_cmap = plt.cm.Reds
+            harmless_cmap = plt.cm.Blues
+
             # Draw harmful edges in red (normalized independently)
             harmful_matrix = harmful_counts.get((layer_i, layer_i + 1))
             if harmful_matrix is not None and max_harmful > 0:
@@ -261,9 +266,10 @@ def visualize_expert_routing(
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Red for harmful - normalize within harmful dataset only
+                        # Red for harmful - map to range [0.4, 1.0] to stay visible
                         intensity = min(1.0, count / max_harmful)
-                        color = (intensity, 0, 0)  # Red
+                        color_value = 0.4 + 0.6 * intensity  # Maps to [0.4, 1.0]
+                        color = harmful_cmap(color_value)
 
                         ax.plot(
                             [x_from, x_to],
@@ -287,9 +293,10 @@ def visualize_expert_routing(
                         y_from = node_vertical_position(expert_from, num_experts)
                         y_to = node_vertical_position(expert_to, num_experts)
 
-                        # Blue for harmless - normalize within harmless dataset only
+                        # Blue for harmless - map to range [0.4, 1.0] to stay visible
                         intensity = min(1.0, count / max_harmless)
-                        color = (0, 0, intensity)  # Blue
+                        color_value = 0.4 + 0.6 * intensity  # Maps to [0.4, 1.0]
+                        color = harmless_cmap(color_value)
 
                         ax.plot(
                             [x_from, x_to],
@@ -297,7 +304,7 @@ def visualize_expert_routing(
                             lw=width,
                             color=color,
                             alpha=edge_alpha,
-                            zorder=1
+                            zorder=2  # Draw blue on top so it's more visible
                         )
 
         else:
@@ -360,12 +367,15 @@ def visualize_expert_routing(
 
     # Add legend or colorbar depending on mode
     if use_separate_colors:
-        # Create custom legend for harmful/harmless
+        # Create custom legend for harmful/harmless with gradient examples
+        # Show light to dark for each color
         legend_elements = [
-            Line2D([0], [0], color='red', lw=2, label='Harmful prompts'),
-            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts')
+            Line2D([0], [0], color='darkred', lw=3, label='Harmful (high frequency)'),
+            Line2D([0], [0], color='lightcoral', lw=1.5, label='Harmful (low frequency)'),
+            Line2D([0], [0], color='darkblue', lw=3, label='Harmless (high frequency)'),
+            Line2D([0], [0], color='lightblue', lw=1.5, label='Harmless (low frequency)')
         ]
-        legend = ax.legend(handles=legend_elements, loc='upper right', fontsize=12)
+        legend = ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
         # Add note about independent normalization
         ax.text(
             0.98, 0.02,
