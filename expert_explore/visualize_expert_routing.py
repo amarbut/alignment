@@ -709,7 +709,7 @@ def visualize_side_by_side(
                             # Skip similar edges
                             continue
                         elif show_which == 'all':
-                            # Highlight different edges
+                            # Highlight different edges in green
                             if (color_name == 'red' and label == 1) or (color_name == 'blue' and label == -1):
                                 is_different = True
                                 alpha = 0.9  # More opaque for different paths
@@ -719,16 +719,20 @@ def visualize_side_by_side(
                     y_to = node_vertical_position(expert_to, num_experts)
 
                     # Choose color
-                    intensity = min(1.0, count / max_count)
-                    if color_name == 'red':
-                        color_value = 0.6 + 0.4 * intensity
-                    else:  # blue
-                        color_value = 0.4 - 0.4 * intensity
-                    color = bwr_cmap(color_value)
-
-                    # If highlighting and edge is different, make it brighter
                     if is_different:
+                        # Use green for paths that are distinctive to this dataset
+                        intensity = min(1.0, count / max_count)
+                        # Map to green gradient: light green to dark green
+                        color = plt.cm.Greens(0.4 + 0.6 * intensity)
                         width *= 1.5  # Make different edges thicker
+                    else:
+                        # Use red or blue for normal paths
+                        intensity = min(1.0, count / max_count)
+                        if color_name == 'red':
+                            color_value = 0.6 + 0.4 * intensity
+                        else:  # blue
+                            color_value = 0.4 - 0.4 * intensity
+                        color = bwr_cmap(color_value)
 
                     ax.plot(
                         [x_from, x_to],
@@ -783,8 +787,13 @@ def visualize_side_by_side(
     ax2.set_title('Harmless Prompts', fontsize=14, fontweight='bold', pad=20)
 
     if highlight_differences:
-        fig.suptitle('Expert Routing Side-by-Side (Different Paths Highlighted)',
+        fig.suptitle('Expert Routing Side-by-Side (Green = Distinctive Pathways)',
                      fontsize=16, fontweight='bold', y=0.98)
+        # Add a note explaining the highlighting
+        fig.text(0.5, 0.02,
+                 'Green paths are significantly more prevalent in that dataset (>{}x more frequent than the other)'.format(difference_threshold),
+                 ha='center', fontsize=11, style='italic',
+                 bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.3))
     else:
         fig.suptitle('Expert Routing Side-by-Side Comparison',
                      fontsize=16, fontweight='bold', y=0.98)
