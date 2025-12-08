@@ -97,14 +97,16 @@ def build_transition_matrices(routing_data, use_top_k=True, separate_labels=Fals
         return transition_counts, num_layers, num_experts
 
 
-def apply_edge_filtering(transition_counts, top_k_edges=None, min_threshold=0):
+def apply_edge_filtering(transition_counts, top_k_edges=None, top_percent_edges=None, min_threshold=0, verbose=False):
     """
     Filter edges based on transition frequency.
 
     Args:
         transition_counts: Dictionary of transition matrices
         top_k_edges: If specified, keep only top K edges per layer pair
+        top_percent_edges: If specified, keep edges that carry this % of total traffic (0-100)
         min_threshold: Minimum count to keep an edge
+        verbose: If True, print filtering statistics
 
     Returns:
         Filtered transition_counts dictionary
@@ -113,8 +115,37 @@ def apply_edge_filtering(transition_counts, top_k_edges=None, min_threshold=0):
 
     for layer_pair, matrix in transition_counts.items():
         filtered_matrix = matrix.copy()
+        original_edges = np.count_nonzero(matrix)
 
-        if top_k_edges is not None and top_k_edges > 0:
+        if top_percent_edges is not None and 0 < top_percent_edges <= 100:
+            # Keep only edges that account for X% of total traffic
+            total_traffic = matrix.sum()
+            if total_traffic > 0:
+                # Sort edges by frequency (descending)
+                flat_values = matrix.flatten()
+                sorted_indices = np.argsort(flat_values)[::-1]
+
+                # Compute cumulative percentage
+                cumsum = 0
+                threshold_value = 0
+                target_traffic = (top_percent_edges / 100.0) * total_traffic
+
+                for idx in sorted_indices:
+                    cumsum += flat_values[idx]
+                    if cumsum >= target_traffic:
+                        threshold_value = flat_values[idx]
+                        break
+
+                # Keep only edges at or above threshold
+                filtered_matrix[matrix < threshold_value] = 0
+
+                if verbose:
+                    kept_edges = np.count_nonzero(filtered_matrix)
+                    actual_percent = 100 * filtered_matrix.sum() / total_traffic if total_traffic > 0 else 0
+                    print(f"  Layer {layer_pair[0]}->{layer_pair[1]}: Kept {kept_edges}/{original_edges} edges "
+                          f"({100*kept_edges/original_edges:.1f}%) carrying {actual_percent:.1f}% of traffic")
+
+        elif top_k_edges is not None and top_k_edges > 0:
             # Keep only top K edges
             flat_values = matrix.flatten()
             if len(flat_values) > top_k_edges:
@@ -331,15 +362,14 @@ def visualize_expert_routing(
     if use_separate_colors:
         # Create custom legend for harmful/harmless
         legend_elements = [
-            Line2D([0], [0], color='red', lw=2, label='Harmful prompts (normalized)'),
-            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts (normalized)'),
-            Line2D([0], [0], color='purple', lw=2, label='Both (overlapping)')
+            Line2D([0], [0], color='red', lw=2, label='Harmful prompts'),
+            Line2D([0], [0], color='blue', lw=2, label='Harmless prompts')
         ]
         legend = ax.legend(handles=legend_elements, loc='upper right', fontsize=12)
         # Add note about independent normalization
         ax.text(
             0.98, 0.02,
-            'Note: Each dataset normalized independently\n(darker = more frequent within that dataset)',
+            'Note: Each dataset processed and visualized independently\n(darker/thicker = more frequent within that dataset)',
             transform=ax.transAxes,
             ha='right',
             va='bottom',
@@ -451,7 +481,13 @@ def main():
         '--top-k-edges',
         type=int,
         default=None,
-        help='Keep only top K edges per layer pair (alternative to min-threshold)'
+        help='Keep only top K edges per layer pair'
+    )
+    parser.add_argument(
+        '--top-percent-edges',
+        type=float,
+        default=None,
+        help='Keep edges that carry this percentage of total traffic (0-100, e.g., 80 for top 80%%)'
     )
     parser.add_argument(
         '--max-line-width',
@@ -492,16 +528,25 @@ def main():
             separate_labels=True
         )
 
-        # Apply filtering
+        # Apply filtering to each dataset independently
+        if args.top_percent_edges:
+            print(f"\nFiltering to keep edges carrying {args.top_percent_edges}% of traffic:")
+            print("\nHarmful dataset:")
         harmful_counts = apply_edge_filtering(
             harmful_counts,
             top_k_edges=args.top_k_edges,
-            min_threshold=args.min_threshold
+            top_percent_edges=args.top_percent_edges,
+            min_threshold=args.min_threshold,
+            verbose=bool(args.top_percent_edges)
         )
+        if args.top_percent_edges:
+            print("\nHarmless dataset:")
         harmless_counts = apply_edge_filtering(
             harmless_counts,
             top_k_edges=args.top_k_edges,
-            min_threshold=args.min_threshold
+            top_percent_edges=args.top_percent_edges,
+            min_threshold=args.min_threshold,
+            verbose=bool(args.top_percent_edges)
         )
 
         # Print statistics
@@ -533,6 +578,7 @@ def main():
         transition_counts = apply_edge_filtering(
             transition_counts,
             top_k_edges=args.top_k_edges,
+            top_percent_edges=args.top_percent_edges,
             min_threshold=args.min_threshold
         )
 
