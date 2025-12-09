@@ -49,28 +49,35 @@ def create_mlp_hook(layer_idx):
     return hook
 
 
-def load_beavertails_matched_pairs(n_pairs: int = 100, split: str = '30k_test'):
+def load_beavertails_matched_pairs(
+    n_pairs: int = 100,
+    split: str = '30k_test',
+    refusal_template: str = "I'm sorry, but I can't help with that."
+):
     """
-    Load BeaverTails dataset and create matched pairs.
+    Load BeaverTails dataset and create matched pairs with synthetic refusals.
 
-    BeaverTails has:
-    - 'prompt': The user request
-    - 'response': The model response
-    - 'is_safe': Whether the response is safe (True) or harmful (False)
+    Instead of looking for natural refusals in BeaverTails, we:
+    1. Take unsafe (harmful) examples from BeaverTails
+    2. Keep the actual harmful response
+    3. Pair it with a synthetic refusal template
 
-    We want matched pairs where the same prompt has both a safe (refusing) and
-    unsafe (complying) response.
+    This gives us clean matched pairs:
+    - Same prompt
+    - One explicit refusal
+    - One harmful compliance
 
     Args:
-        n_pairs: Number of matched pairs to extract
+        n_pairs: Number of matched pairs to create
         split: Which BeaverTails split to use
+        refusal_template: The refusal text to use (can customize)
 
     Returns:
         List of matched pairs, each containing:
         {
             'prompt': str,
-            'refusal_response': str,
-            'harmful_response': str
+            'refusal_response': str (synthetic),
+            'harmful_response': str (from BeaverTails)
         }
     """
     print(f"Loading BeaverTails dataset (split: {split})...")
@@ -80,56 +87,24 @@ def load_beavertails_matched_pairs(n_pairs: int = 100, split: str = '30k_test'):
 
     print(f"Loaded {len(dataset)} examples")
 
-    # Group by prompt
-    prompt_groups = {}
-    for item in tqdm(dataset, desc="Grouping by prompt"):
-        prompt = item['prompt']
-        is_safe = item['is_safe']
-        response = item['response']
+    # Filter to unsafe examples (these have harmful responses)
+    unsafe_examples = [item for item in dataset if not item['is_safe']]
 
-        if prompt not in prompt_groups:
-            prompt_groups[prompt] = {'safe': [], 'unsafe': []}
+    print(f"Found {len(unsafe_examples)} unsafe examples")
 
-        if is_safe:
-            prompt_groups[prompt]['safe'].append(response)
-        else:
-            prompt_groups[prompt]['unsafe'].append(response)
-
-    # Find matched pairs (prompts with both safe and unsafe responses)
+    # Create matched pairs with synthetic refusals
     matched_pairs = []
-    for prompt, responses in prompt_groups.items():
-        if responses['safe'] and responses['unsafe']:
-            # Take first response of each type
-            matched_pairs.append({
-                'prompt': prompt,
-                'refusal_response': responses['safe'][0],
-                'harmful_response': responses['unsafe'][0]
-            })
+    for item in unsafe_examples[:n_pairs]:
+        matched_pairs.append({
+            'prompt': item['prompt'],
+            'refusal_response': refusal_template,  # Synthetic refusal
+            'harmful_response': item['response']    # Actual harmful response
+        })
 
-        if len(matched_pairs) >= n_pairs:
-            break
+    print(f"\nCreated {len(matched_pairs)} matched pairs with synthetic refusals")
+    print(f"Refusal template: '{refusal_template}'")
 
-    print(f"\nFound {len(matched_pairs)} matched pairs (prompts with both safe and unsafe responses)")
-
-    if len(matched_pairs) == 0:
-        print("\nWARNING: No matched pairs found!")
-        print("This might mean the dataset doesn't have prompts with multiple responses.")
-        print("Falling back to separate safe/unsafe examples...")
-
-        # Fallback: Just take separate examples
-        safe_examples = [item for item in dataset if item['is_safe']][:n_pairs]
-        unsafe_examples = [item for item in dataset if not item['is_safe']][:n_pairs]
-
-        matched_pairs = [
-            {
-                'prompt': safe['prompt'],
-                'refusal_response': safe['response'],
-                'harmful_response': unsafe['response']
-            }
-            for safe, unsafe in zip(safe_examples, unsafe_examples)
-        ]
-
-    return matched_pairs[:n_pairs]
+    return matched_pairs
 
 
 def extract_routing_for_response(
@@ -309,6 +284,12 @@ def main():
         help='BeaverTails split to use (30k_train, 30k_test, etc.)'
     )
     parser.add_argument(
+        '--refusal_template',
+        type=str,
+        default="I'm sorry, but I can't help with that.",
+        help='Refusal template to use for synthetic refusals'
+    )
+    parser.add_argument(
         '--batch_process',
         action='store_true',
         help='Process in batches (experimental)'
@@ -329,7 +310,8 @@ def main():
 
     matched_pairs = load_beavertails_matched_pairs(
         n_pairs=args.n_pairs,
-        split=args.beavertails_split
+        split=args.beavertails_split,
+        refusal_template=args.refusal_template
     )
 
     print(f"\nAnalyzing {len(matched_pairs)} matched pairs")
