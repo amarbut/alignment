@@ -21,6 +21,8 @@ from tqdm import tqdm
 from datasets import load_dataset
 from typing import List, Dict, Tuple
 import numpy as np
+from collections import Counter
+
 
 # Add alignment directory to path
 alignment_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,10 +51,32 @@ def create_mlp_hook(layer_idx):
     return hook
 
 
+# Common refusal templates (variety of phrasings)
+REFUSAL_TEMPLATES = [
+    "I'm sorry, but I can't help with that.",
+    "I cannot assist with that request.",
+    "I'm not able to help with requests like this.",
+    "I can't help with that.",
+    "I'm sorry, I cannot assist with that.",
+    "I'm unable to help with this request.",
+    "I can't provide assistance with that.",
+    "I'm afraid I can't help with that.",
+    "I'm not able to assist with that.",
+    "I cannot help with that request.",
+    "Sorry, but I can't help with that.",
+    "I'm unable to provide that assistance.",
+    "I can't help you with that.",
+    "I'm not comfortable helping with that.",
+    "I cannot provide help with that request.",
+]
+
+
 def load_beavertails_matched_pairs(
     n_pairs: int = 100,
     split: str = '30k_test',
-    refusal_template: str = "I'm sorry, but I can't help with that."
+    refusal_template: str = None,
+    randomize_refusals: bool = True,
+    seed: int = 42
 ):
     """
     Load BeaverTails dataset and create matched pairs with synthetic refusals.
@@ -60,17 +84,19 @@ def load_beavertails_matched_pairs(
     Instead of looking for natural refusals in BeaverTails, we:
     1. Take unsafe (harmful) examples from BeaverTails
     2. Keep the actual harmful response
-    3. Pair it with a synthetic refusal template
+    3. Pair it with a synthetic refusal (randomized or fixed template)
 
     This gives us clean matched pairs:
     - Same prompt
-    - One explicit refusal
-    - One harmful compliance
+    - One explicit refusal (synthetic)
+    - One harmful compliance (from BeaverTails)
 
     Args:
         n_pairs: Number of matched pairs to create
         split: Which BeaverTails split to use
-        refusal_template: The refusal text to use (can customize)
+        refusal_template: Specific refusal text (overrides randomization if provided)
+        randomize_refusals: If True, randomly select from REFUSAL_TEMPLATES
+        seed: Random seed for reproducibility
 
     Returns:
         List of matched pairs, each containing:
@@ -81,6 +107,9 @@ def load_beavertails_matched_pairs(
         }
     """
     print(f"Loading BeaverTails dataset (split: {split})...")
+
+    # Set random seed for reproducibility
+    np.random.seed(seed)
 
     # Load BeaverTails from HuggingFace
     dataset = load_dataset("PKU-Alignment/BeaverTails", split=split)
@@ -94,15 +123,38 @@ def load_beavertails_matched_pairs(
 
     # Create matched pairs with synthetic refusals
     matched_pairs = []
+    refusal_counts = Counter()
+
     for item in unsafe_examples[:n_pairs]:
+        # Select refusal template
+        if refusal_template is not None:
+            # Use user-specified template
+            refusal_text = refusal_template
+        elif randomize_refusals:
+            # Randomly select from templates
+            refusal_text = np.random.choice(REFUSAL_TEMPLATES)
+            refusal_counts[refusal_text] += 1
+        else:
+            # Use default
+            refusal_text = REFUSAL_TEMPLATES[0]
+
         matched_pairs.append({
             'prompt': item['prompt'],
-            'refusal_response': refusal_template,  # Synthetic refusal
-            'harmful_response': item['response']    # Actual harmful response
+            'refusal_response': refusal_text,  # Synthetic refusal
+            'harmful_response': item['response']  # Actual harmful response
         })
 
     print(f"\nCreated {len(matched_pairs)} matched pairs with synthetic refusals")
-    print(f"Refusal template: '{refusal_template}'")
+
+    if refusal_template is not None:
+        print(f"Using fixed template: '{refusal_template}'")
+    elif randomize_refusals:
+        print(f"Using {len(REFUSAL_TEMPLATES)} randomized refusal templates")
+        print(f"Refusal distribution:")
+        for template, count in refusal_counts.most_common():
+            print(f"  [{count:3d}x] {template}")
+    else:
+        print(f"Using default template: '{REFUSAL_TEMPLATES[0]}'")
 
     return matched_pairs
 
@@ -286,8 +338,19 @@ def main():
     parser.add_argument(
         '--refusal_template',
         type=str,
-        default="I'm sorry, but I can't help with that.",
-        help='Refusal template to use for synthetic refusals'
+        default=None,
+        help='Specific refusal template (overrides randomization)'
+    )
+    parser.add_argument(
+        '--no_randomize',
+        action='store_true',
+        help='Disable randomization and use fixed template'
+    )
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for refusal selection'
     )
     parser.add_argument(
         '--batch_process',
@@ -311,7 +374,9 @@ def main():
     matched_pairs = load_beavertails_matched_pairs(
         n_pairs=args.n_pairs,
         split=args.beavertails_split,
-        refusal_template=args.refusal_template
+        refusal_template=args.refusal_template,
+        randomize_refusals=not args.no_randomize,
+        seed=args.seed
     )
 
     print(f"\nAnalyzing {len(matched_pairs)} matched pairs")
