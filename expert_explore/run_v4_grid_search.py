@@ -302,12 +302,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="V4 Grid Search over epsilon and threshold")
     parser.add_argument('--n_test', type=int, default=100, help='Number of test examples')
     parser.add_argument('--model_path', type=str, default='openai/gpt-oss-20b', help='Model path')
+    parser.add_argument('--epsilon_values', nargs='+', type=float, default=None)
 
     args = parser.parse_args()
 
     # Run grid search
+    epsilon_values=args.epsilon_values
+    if epsilon_values == None:
+        epsilon_values = [0.01, 0.1, 1, 5, 10]
+    
     results_df = run_grid_search(
-        epsilon_values=[0.01, 0.1, 1, 5, 10],
+        epsilon_values=epsilon_values,
         threshold_values=[0.1, 0.2, 0.3, 0.4, 0.5],
         n_test=args.n_test,
         model_path=args.model_path
