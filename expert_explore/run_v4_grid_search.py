@@ -147,23 +147,12 @@ def run_grid_search(
                     dataset=harmless_test
                 )
 
-                # Evaluate with substring-matching
+                # Evaluate results
                 evaluate_completions_and_save_results_for_dataset(
                     cfg=cfg,
                     intervention_label=intervention_label,
                     dataset_name='harmless',
-                    eval_methodologies=['substring-matching'],
-                    topk=1,
-                    coeff=1.0,
-                    tau=1.0
-                )
-
-                # Evaluate with llamaguard2
-                evaluate_completions_and_save_results_for_dataset(
-                    cfg=cfg,
-                    intervention_label=intervention_label,
-                    dataset_name='harmless',
-                    eval_methodologies=['llamaguard2'],
+                    eval_methodologies=cfg.refusal_eval_methodologies,
                     topk=1,
                     coeff=1.0,
                     tau=1.0
@@ -191,7 +180,6 @@ def run_grid_search(
 
             print(f"\nRefusal results:")
             print(f"  Substring refusal rate: {refusal_result['substring_refusal_rate']:.3f}" if refusal_result['substring_refusal_rate'] else "  Substring refusal rate: None")
-            print(f"  LlamaGuard2 refusal rate: {refusal_result['llamaguard2_refusal_rate']:.3f}" if refusal_result['llamaguard2_refusal_rate'] else "  LlamaGuard2 refusal rate: None")
 
             # RESPONSE INDUCTION
             run_count += 1
@@ -226,23 +214,12 @@ def run_grid_search(
                     dataset=jailbreakbench_test
                 )
 
-                # Evaluate with substring-matching
+                # Evaluate results
                 evaluate_completions_and_save_results_for_dataset(
                     cfg=cfg,
                     intervention_label=intervention_label,
                     dataset_name='jailbreakbench',
-                    eval_methodologies=['substring-matching'],
-                    topk=1,
-                    coeff=1.0,
-                    tau=1.0
-                )
-
-                # Evaluate with llamaguard2
-                evaluate_completions_and_save_results_for_dataset(
-                    cfg=cfg,
-                    intervention_label=intervention_label,
-                    dataset_name='jailbreakbench',
-                    eval_methodologies=['llamaguard2'],
+                    eval_methodologies=cfg.jailbreak_eval_methodologies,
                     topk=1,
                     coeff=1.0,
                     tau=1.0
