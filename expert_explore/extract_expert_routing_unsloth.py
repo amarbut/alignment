@@ -467,7 +467,7 @@ def main():
     harmless_data = load_dataset(args.harmless_dataset)
 
     harmful_prompts = [item["instruction"] for item in harmful_data]
-    harmless_prompts = [item["instruction"] for item in harmless_data]
+    harmless_prompts = random.sample([item["instruction"] for item in harmless_data], 500)
 
     print(f"Loaded {len(harmful_prompts)} harmful prompts")
     print(f"Loaded {len(harmless_prompts)} harmless prompts")
