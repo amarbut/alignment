@@ -72,33 +72,28 @@ class StochasticExpertDropout:
 
     def _create_dropout_hook(self, layer_idx: int):
         """
-        Create a forward hook that applies expert dropout to a specific layer.
+        Create a pre-forward hook that applies expert dropout by temporarily
+        modifying router weights.
 
-        The hook intercepts the MLP forward pass output (hidden_states, router_logits)
-        and masks random experts by modifying the router logits.
+        Since OSS-20B computes router logits inline (not via router.forward()),
+        we modify the router bias before the MLP forward pass.
         """
-        def hook(module, input, output):
+        original_bias = [None]  # Store original bias
+
+        def pre_hook(module, input):
             # Only apply dropout during training
             if not self.enabled or not self.model.training:
-                return output
+                return
 
             # Skip excluded layers
             if layer_idx in self.exclude_layers:
-                return output
-
-            # MLP output is a tuple: (hidden_states, router_logits)
-            if not isinstance(output, tuple) or len(output) < 2:
-                return output
-
-            hidden_states, router_logits = output[0], output[1]
-
-            # router_logits shape: (batch_size * seq_len, num_experts)
+                return
 
             # Determine how many experts to drop
             num_to_drop = int(self.num_experts * self.dropout_rate)
 
             if num_to_drop == 0:
-                return output
+                return
 
             # Get all expert indices
             all_experts = set(range(self.num_experts))
@@ -108,25 +103,32 @@ class StochasticExpertDropout:
             num_to_drop = min(num_to_drop, len(available_experts))
 
             if num_to_drop == 0:
-                return output
+                return
 
             # Randomly select experts to drop
-            # Note: This samples once per forward pass for all tokens in the batch
             dropped_experts = np.random.choice(
                 list(available_experts),
                 size=num_to_drop,
                 replace=False
             )
 
-            # Create a mask for dropped experts
-            # Clone the logits to avoid in-place modification
-            masked_logits = router_logits.clone()
-            masked_logits[:, dropped_experts] = self.mask_value
+            # Save original bias and modify it
+            router = module.router
+            original_bias[0] = router.bias.data.clone()
 
-            # Return modified tuple
-            return (hidden_states, masked_logits)
+            # Create modified bias with dropped experts masked
+            modified_bias = router.bias.data.clone()
+            modified_bias[dropped_experts] = self.mask_value
+            router.bias.data = modified_bias
 
-        return hook
+        def post_hook(module, input, output):
+            # Restore original bias after forward pass
+            if original_bias[0] is not None:
+                module.router.bias.data = original_bias[0]
+                original_bias[0] = None
+            return output
+
+        return pre_hook, post_hook
 
     def enable(self):
         """Enable expert dropout by registering forward hooks."""
@@ -140,14 +142,17 @@ class StochasticExpertDropout:
             np.random.seed(self.seed)
             torch.manual_seed(self.seed)
 
-        # Register hooks on all MLP modules
+        # Register hooks on MLP modules (since router.forward() isn't called)
         for layer_idx in range(self.num_layers):
             if layer_idx in self.exclude_layers:
                 continue
 
             mlp = self.model.model.layers[layer_idx].mlp
-            hook = mlp.register_forward_hook(self._create_dropout_hook(layer_idx))
-            self.hooks.append(hook)
+            pre_hook, post_hook = self._create_dropout_hook(layer_idx)
+            pre_handle = mlp.register_forward_pre_hook(pre_hook)
+            post_handle = mlp.register_forward_hook(post_hook)
+            self.hooks.append(pre_handle)
+            self.hooks.append(post_handle)
 
         self.enabled = True
         print(f"Registered {len(self.hooks)} dropout hooks")
@@ -181,63 +186,14 @@ class PerTokenExpertDropout(StochasticExpertDropout):
     """
     Variant that applies independent dropout to each token position.
 
-    This provides more stochasticity by sampling different expert masks
-    for each token in the sequence, rather than using the same mask
-    for all tokens in a batch.
+    Note: This is NOT implemented for OSS-20B's fused experts since we can't
+    apply per-token bias modifications. Falls back to per-batch dropout.
     """
 
-    def _create_dropout_hook(self, layer_idx: int):
-        """
-        Create a hook that applies per-token expert dropout.
-        """
-        def hook(module, input, output):
-            # Only apply dropout during training
-            if not self.enabled or not self.model.training:
-                return output
-
-            # Skip excluded layers
-            if layer_idx in self.exclude_layers:
-                return output
-
-            # MLP output is a tuple: (hidden_states, router_logits)
-            if not isinstance(output, tuple) or len(output) < 2:
-                return output
-
-            hidden_states, router_logits = output[0], output[1]
-
-            # router_logits shape: (batch_size * seq_len, num_experts)
-            batch_seq_len = router_logits.shape[0]
-
-            # Determine how many experts to drop
-            num_to_drop = int(self.num_experts * self.dropout_rate)
-
-            if num_to_drop == 0:
-                return output
-
-            # Get available experts
-            all_experts = set(range(self.num_experts))
-            available_experts = list(all_experts - self.exclude_experts)
-            num_to_drop = min(num_to_drop, len(available_experts))
-
-            if num_to_drop == 0:
-                return output
-
-            # Create dropout mask for each token position
-            masked_logits = router_logits.clone()
-
-            for token_idx in range(batch_seq_len):
-                # Sample different experts to drop for each token
-                dropped_experts = np.random.choice(
-                    available_experts,
-                    size=num_to_drop,
-                    replace=False
-                )
-                masked_logits[token_idx, dropped_experts] = self.mask_value
-
-            # Return modified tuple
-            return (hidden_states, masked_logits)
-
-        return hook
+    def __init__(self, *args, **kwargs):
+        print("Warning: Per-token dropout not supported for OSS-20B fused experts.")
+        print("Falling back to per-batch dropout.")
+        super().__init__(*args, **kwargs)
 
 
 def test_expert_dropout():

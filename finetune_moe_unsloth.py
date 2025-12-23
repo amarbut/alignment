@@ -13,6 +13,7 @@ Training modes:
 All modes use stochastic expert dropout during training.
 """
 
+import unsloth
 import os
 import sys
 
@@ -172,7 +173,7 @@ def setup_model_for_training(
     training_mode: str,
     lora_rank: int = 8,
     lora_alpha: int = 16,
-    lora_dropout: float = 0.05,
+    lora_dropout: float = 0.0,
 ):
     """
     Configure model for one of three training modes using LoRA.
@@ -210,30 +211,30 @@ def setup_model_for_training(
 
     elif training_mode == "expert":
         print("\nMode: EXPERT-ONLY")
-        print("Training: Expert weights only")
+        print("Training: Expert MLP weights only")
         print("Frozen: Routers, attention, embeddings")
 
-        # Target all individual expert linear layers
-        # Need to specify each expert index explicitly
+        # GPT-OSS MoE requires indexing each expert explicitly
+        # Unsloth's simple syntax only works when training attention + MLP together
         target_modules = []
         for i in range(num_experts):
             target_modules.append(f"gate_up_projs.{i}")
             target_modules.append(f"down_projs.{i}")
 
-        print(f"  Targeting {len(target_modules)} expert layers ({num_experts} experts × 2 proj types)")
+        print(f"  Targeting {num_experts} experts × 2 projections = {len(target_modules)} modules")
 
     elif training_mode == "combined":
         print("\nMode: COMBINED")
         print("Training: Both routers AND expert weights")
         print("Frozen: Attention, embeddings")
 
-        # Target router and all expert layers
+        # Target router and all expert layers (indexed)
         target_modules = ["router.linear"]
         for i in range(num_experts):
             target_modules.append(f"gate_up_projs.{i}")
             target_modules.append(f"down_projs.{i}")
 
-        print(f"  Targeting router + {num_experts*2} expert layers")
+        print(f"  Targeting router + {num_experts} experts × 2 projections")
 
     else:
         raise ValueError(f"Unknown training mode: {training_mode}")
@@ -358,7 +359,7 @@ def main():
     parser.add_argument(
         "--lora_dropout",
         type=float,
-        default=0.05,
+        default=0.0,
         help="LoRA dropout rate"
     )
 
@@ -556,15 +557,16 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         save_total_limit=3,
-        fp16=not is_bfloat16_supported(),
-        bf16=is_bfloat16_supported(),
+        fp16=False,  # Disable mixed precision for router training stability
+        bf16=False,
         logging_dir=f"{args.output_dir}/logs",
         report_to=[],  # Disable reporting (tensorboard not installed)
         seed=args.seed,
         dataloader_num_workers=0,  # Disable multiprocessing to avoid batching issues
-        # Optimizer settings
+        # Optimizer settings (using unsloth tutorial configuration to avoid CUDA errors)
         optim="adamw_8bit",  # Use unsloth's optimized 8-bit AdamW
-        weight_decay=0.01,
+        weight_decay=0.001,  # Tutorial setting (prevents CUDA errors at step 285+)
+        lr_scheduler_type="linear",  # Tutorial setting for stability
         max_grad_norm=0.5,  # Aggressive gradient clipping for stability
         # Logging for diagnostics
         log_level="warning",
