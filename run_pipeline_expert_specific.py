@@ -22,12 +22,13 @@ from pathlib import Path
 from dataset.load_dataset import load_dataset_split, load_dataset
 from pipeline.config import Config
 from pipeline.model_utils.model_factory import construct_model_base
-from pipeline.submodules.select_direction import select_direction
+from pipeline.submodules.select_direction import get_refusal_scores
 from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from expert_selection import get_candidate_experts
 from expert_specific_activations import get_expert_mean_diff
 from expert_intervention import get_expert_weighted_intervention_hooks
+from expert_selection_mlp import select_expert_direction
 
 
 def parse_arguments():
@@ -121,37 +122,93 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def load_and_sample_datasets(n_train, n_val, n_test):
+def load_and_sample_datasets(cfg):
     """Load and sample datasets."""
     random.seed(42)
 
     harmful_train = random.sample(
-        load_dataset_split(harmtype='harmful', split='train', instructions_only=True),
-        n_train
+        load_dataset_split(harmtype='harmful', split='train', instructions_only=True),cfg.n_train
     )
     harmless_train = random.sample(
         load_dataset_split(harmtype='harmless', split='train', instructions_only=True),
-        n_train
+        cfg.n_train
     )
     harmful_val = random.sample(
         load_dataset_split(harmtype='harmful', split='val', instructions_only=True),
-        n_val
+        cfg.n_val
     )
     harmless_val = random.sample(
         load_dataset_split(harmtype='harmless', split='val', instructions_only=True),
-        n_val
+        cfg.n_val
     )
     harmful_test = random.sample(
         load_dataset_split(harmtype='harmful', split='test', instructions_only=True),
-        n_test
+        cfg.n_val
     )
     harmless_test = random.sample(
         load_dataset_split(harmtype='harmless', split='test', instructions_only=True),
-        n_test
+        cfg.n_val
     )
 
     return (harmful_train, harmless_train, harmful_val,
             harmless_val, harmful_test, harmless_test)
+
+
+def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
+    """
+    Filter datasets based on refusal scores.
+
+    Returns:
+        Filtered datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
+    """
+    def filter_examples(dataset, scores, threshold, comparison):
+        return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
+
+    if cfg.filter_train:
+        print("\n  Filtering training data...")
+        harmful_train_scores = get_refusal_scores(
+            model_base.model, harmful_train, model_base.tokenize_instructions_fn,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+        )
+        harmless_train_scores = get_refusal_scores(
+            model_base.model, harmless_train, model_base.tokenize_instructions_fn,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+        )
+
+        harmful_train_filtered = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
+        harmless_train_filtered = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
+
+        print(f"    Harmful train: {len(harmful_train)} -> {len(harmful_train_filtered)}")
+        print(f"    Harmless train: {len(harmless_train)} -> {len(harmless_train_filtered)}")
+
+        harmful_train = harmful_train_filtered
+        harmless_train = harmless_train_filtered
+
+    if cfg.filter_val:
+        print("\n  Filtering validation data...")
+        harmful_val_scores = get_refusal_scores(
+            model_base.model, harmful_val, model_base.tokenize_instructions_fn,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+        )
+        harmless_val_scores = get_refusal_scores(
+            model_base.model, harmless_val, model_base.tokenize_instructions_fn,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+        )
+
+        harmful_val_filtered = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
+        harmless_val_filtered = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
+
+        print(f"    Harmful val: {len(harmful_val)} -> {len(harmful_val_filtered)}")
+        print(f"    Harmless val: {len(harmless_val)} -> {len(harmless_val_filtered)}")
+
+        harmful_val = harmful_val_filtered
+        harmless_val = harmless_val_filtered
+
+    return harmful_train, harmless_train, harmful_val, harmless_val
 
 
 def generate_expert_specific_directions(
@@ -263,14 +320,15 @@ def select_best_expert_direction(
     print(f"Candidates tensor shape: {candidates.shape}")
     print(f"Number of expert candidates: {len(candidate_mapping)}")
 
-    # Use Arditi's selection (treats each expert as a "layer")
+    # Use expert-specific MLP-level selection
     mu_b = torch.zeros(candidates.size(-1), device=candidates.device)
 
-    pos, candidate_idx, direction = select_direction(
+    pos, candidate_idx, direction = select_expert_direction(
         model_base,
         harmful_val,
         harmless_val,
         candidates,
+        candidate_mapping,  # Pass the mapping so we know which layer each expert is in
         artifact_dir=artifact_dir,
         coeff=1.0,
         mu_b=mu_b,
@@ -388,13 +446,24 @@ def run_expert_specific_pipeline(args):
     print("LOADING DATASETS")
     print("="*80)
     (harmful_train, harmless_train, harmful_val,
-     harmless_val, harmful_test, harmless_test) = load_and_sample_datasets(
-        args.n_train, args.n_val, args.n_test
+     harmless_val, harmful_test, harmless_test) = load_and_sample_datasets(cfg)
+
+    print(f"Raw data:")
+    print(f"  Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
+    print(f"  Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
+    print(f"  Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
+
+    # Filter datasets based on refusal scores
+    print("\nFiltering datasets based on refusal scores...")
+    (harmful_train, harmless_train,
+     harmful_val, harmless_val) = filter_data(
+        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val
     )
 
-    print(f"Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
-    print(f"Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
-    print(f"Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
+    print(f"\nFiltered data:")
+    print(f"  Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
+    print(f"  Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
+    print(f"  Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
 
     # Select candidate experts
     print("\n" + "="*80)

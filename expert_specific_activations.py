@@ -70,15 +70,24 @@ def force_expert_via_bias(
     # model.model.layers[layer_idx].mlp.router
     router = model_base.model.model.layers[layer_idx].mlp.router
 
+    # For unsloth models, bias is in router.linear.bias
+    # For standard models, it's router.bias
+    if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
+        bias_param = router.linear.bias
+    elif hasattr(router, 'bias'):
+        bias_param = router.bias
+    else:
+        raise AttributeError(f"Could not find bias in router: {type(router)}")
+
     # Save original bias
-    original_bias = router.bias.data.clone()
+    original_bias = bias_param.data.clone()
 
     # Create modified bias: set all to very negative, then boost target expert
     modified_bias = torch.full_like(original_bias, -force_strength)
     modified_bias[expert_id] = force_strength
 
     # Apply modification
-    router.bias.data = modified_bias
+    bias_param.data = modified_bias
 
     return original_bias
 
@@ -90,7 +99,15 @@ def restore_router_bias(
 ):
     """Restore original router bias."""
     router = model_base.model.model.layers[layer_idx].mlp.router
-    router.bias.data = original_bias
+
+    # For unsloth models, bias is in router.linear.bias
+    # For standard models, it's router.bias
+    if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
+        router.linear.bias.data = original_bias
+    elif hasattr(router, 'bias'):
+        router.bias.data = original_bias
+    else:
+        raise AttributeError(f"Could not find bias in router: {type(router)}")
 
 
 def get_expert_activations(
