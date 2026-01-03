@@ -77,8 +77,13 @@ class ModelBase(ABC):
     #     pass
 
     def generate_completions(self, dataset, fwd_pre_hooks=[], fwd_hooks=[], batch_size=8, max_new_tokens=64):
-        generation_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
-        generation_config.pad_token_id = self.tokenizer.pad_token_id
+        generation_config = GenerationConfig(
+            max_new_tokens=max_new_tokens,
+            max_length=None,  # Disable max_length so max_new_tokens takes precedence
+            do_sample=False,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+        )
 
         completions = []
         instructions = [x['instruction'] for x in dataset]
@@ -92,6 +97,7 @@ class ModelBase(ABC):
                     input_ids=tokenized_instructions.input_ids.to(self.model.device),
                     attention_mask=tokenized_instructions.attention_mask.to(self.model.device),
                     generation_config=generation_config,
+                    use_cache=False,  # Disable KV cache to avoid dtype issues with hooks
                 )
 
                 generation_toks = generation_toks[:, tokenized_instructions.input_ids.shape[-1]:]

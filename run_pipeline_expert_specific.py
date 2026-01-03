@@ -146,7 +146,7 @@ def load_and_sample_datasets(cfg):
         cfg.n_val
     )
     harmless_test = random.sample(
-        load_dataset_split(harmtype='harmless', split='test', instructions_only=True),
+        load_dataset_split(harmtype='harmless', split='test', instructions_only=False),  # Need full format for evaluation
         cfg.n_val
     )
 
@@ -330,7 +330,7 @@ def select_best_expert_direction(
         candidates,
         candidate_mapping,  # Pass the mapping so we know which layer each expert is in
         artifact_dir=artifact_dir,
-        coeff=1.0,
+        coeff=args.coeff,  # Use command-line argument
         mu_b=mu_b,
         tau=1.0
     )
