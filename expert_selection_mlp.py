@@ -124,7 +124,7 @@ def select_expert_direction(
     coeff,
     mu_b,
     tau,
-    kl_threshold=0.1,
+    kl_threshold=1.0,  # Increased from 0.1 for MoE models
     induce_refusal_threshold=0.0,
     prune_layer_percentage=0.2,
     batch_size=32
@@ -184,23 +184,25 @@ def select_expert_direction(
     )
 
     # Test each candidate direction
+    # Use NEGATIVE actAdd instead of ablation (which breaks the model)
+    # Logic: if we induce refusal (negative coeff), does it mess up logits on harmless?
     for source_pos in range(-n_pos, 0):
         for candidate_idx in tqdm(range(n_candidates), desc=f"Computing KL for position {source_pos}"):
             layer, expert = candidate_mapping[candidate_idx]
 
-            ablation_dir = candidate_directions[source_pos, candidate_idx].unsqueeze(-1)
+            direction_vec = candidate_directions[source_pos, candidate_idx]
 
             # Get MLP module for this layer
             mlp_module = model_base.model.model.layers[layer].mlp
 
-            # Create weighted ablation hooks for MLP output
-            ablation_hook = get_expert_weighted_ablation_hook(
-                direction=ablation_dir,
+            # Use negative actAdd (induce refusal) instead of ablation
+            # This should increase refusal on harmless without breaking the model
+            negative_add_hook = get_expert_weighted_activation_addition_hook(
+                direction=direction_vec,
                 expert_id=expert,
-                mu_b=mu_b,
-                tau=tau
+                coeff=-coeff  # Negative to induce refusal
             )
-            fwd_hooks = [(mlp_module, ablation_hook)]
+            fwd_hooks = [(mlp_module, negative_add_hook)]
 
             intervention_logits = get_last_position_logits(
                 model=model_base.model,
@@ -216,22 +218,23 @@ def select_expert_direction(
                 baseline_harmless_logits, intervention_logits, mask=None
             ).mean(dim=0).item()
 
-    # Compute ablation refusal scores (on harmful)
+    # Compute refusal reduction scores (on harmful)
+    # Use NEGATIVE actAdd instead of ablation
+    # Logic: negative coeff should reduce refusal on harmful (make model comply)
     for source_pos in range(-n_pos, 0):
-        for candidate_idx in tqdm(range(n_candidates), desc=f"Computing refusal ablation for position {source_pos}"):
+        for candidate_idx in tqdm(range(n_candidates), desc=f"Computing refusal reduction for position {source_pos}"):
             layer, expert = candidate_mapping[candidate_idx]
 
-            ablation_dir = candidate_directions[source_pos, candidate_idx].unsqueeze(-1)
+            direction_vec = candidate_directions[source_pos, candidate_idx]
             mlp_module = model_base.model.model.layers[layer].mlp
 
-            # Use weighted ablation
-            ablation_hook = get_expert_weighted_ablation_hook(
-                direction=ablation_dir,
+            # Use negative actAdd (reduce refusal)
+            negative_add_hook = get_expert_weighted_activation_addition_hook(
+                direction=direction_vec,
                 expert_id=expert,
-                mu_b=mu_b,
-                tau=tau
+                coeff=-coeff  # Negative to reduce refusal
             )
-            fwd_hooks = [(mlp_module, ablation_hook)]
+            fwd_hooks = [(mlp_module, negative_add_hook)]
 
             refusal_scores = get_refusal_scores(
                 model_base.model, harmful_instructions,
