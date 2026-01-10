@@ -227,7 +227,7 @@ expert_diff = [[2.71,3.18],
                ]
 
 # full lookup of expert diffs for all layers and experts
-expert_diffs = json.load(open("expert_explore/oss_expert_diffs.json", "r"))
+expert_diffs = json.load(open("expert_explore/beavertails_expert_diffs.json", "r"))
 
 def get_all_layers_refusal_induction_config():
     """

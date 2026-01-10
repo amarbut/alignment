@@ -34,7 +34,7 @@ alignment_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if alignment_dir not in sys.path:
     sys.path.insert(0, alignment_dir)
 
-import fix_hf_cache
+#import fix_hf_cache
 from unsloth import FastLanguageModel
 from peft import PeftModel
 
@@ -467,7 +467,7 @@ def main():
     harmless_data = load_dataset(args.harmless_dataset)
 
     harmful_prompts = [item["instruction"] for item in harmful_data]
-    harmless_prompts = [item["instruction"] for item in harmless_data]
+    harmless_prompts = random.sample([item["instruction"] for item in harmless_data], 500)
 
     print(f"Loaded {len(harmful_prompts)} harmful prompts")
     print(f"Loaded {len(harmless_prompts)} harmless prompts")
