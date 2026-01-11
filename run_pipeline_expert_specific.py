@@ -30,6 +30,130 @@ from expert_specific_activations import get_expert_mean_diff
 from expert_intervention import get_expert_weighted_intervention_hooks
 from expert_selection_mlp import select_expert_direction
 
+# Import for LoRA adapter support
+try:
+    import fix_hf_cache
+    from unsloth import FastLanguageModel
+    from peft import PeftModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    UNSLOTH_AVAILABLE = False
+
+
+def load_model_with_optional_adapter(model_path, adapter_path=None):
+    """
+    Load model with optional LoRA adapter.
+
+    Args:
+        model_path: Base model path
+        adapter_path: Optional path to LoRA adapter
+
+    Returns:
+        model_base: ModelBase object (OSSModel or wrapper)
+    """
+    if adapter_path is not None:
+        if not UNSLOTH_AVAILABLE:
+            raise ImportError("unsloth and peft are required for adapter loading. Please install them.")
+
+        print(f"Loading base model: {model_path}")
+        print(f"Loading adapter from: {adapter_path}")
+
+        # Load with unsloth
+        base_model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_path,
+            max_seq_length=512,
+            dtype=None,
+            load_in_4bit=True,
+        )
+
+        # Load PEFT adapter
+        model = PeftModel.from_pretrained(base_model, adapter_path)
+        print("✓ Loaded model with LoRA adapter")
+
+        # Wrap in OSSModel-like interface
+        from pipeline.model_utils.oss_model import OSSModel
+        model_base = OSSModel.__new__(OSSModel)
+        model_base.model = model
+        model_base.tokenizer = tokenizer
+
+        # Set up tokenizer
+        tokenizer.padding_side = "left"
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Set refusal tokens
+        from pipeline.model_utils.oss_model import OSS_REFUSAL_TOKS
+        model_base.refusal_toks = OSS_REFUSAL_TOKS
+        model_base.refusal_score_suffix_toks = None
+
+        # Set end-of-instruction tokens (for plotting)
+        model_base.eoi_toks = [tokenizer.encode("<|end|>", add_special_tokens=False)]
+
+        # Set tokenization function
+        from pipeline.model_utils.oss_model import tokenize_instructions_oss_chat
+        model_base.tokenize_instructions_fn = lambda instructions, **kwargs: tokenize_instructions_oss_chat(
+            tokenizer, instructions, **kwargs
+        )
+
+        # Set generation function
+        def generate_completions(instructions, fwd_pre_hooks=None, fwd_hooks=None, max_new_tokens=256, batch_size=8):
+            completions = []
+
+            # Register hooks
+            hook_handles = []
+            if fwd_pre_hooks:
+                for module, hook in fwd_pre_hooks:
+                    handle = module.register_forward_pre_hook(hook)
+                    hook_handles.append(handle)
+            if fwd_hooks:
+                for module, hook in fwd_hooks:
+                    handle = module.register_forward_hook(hook)
+                    hook_handles.append(handle)
+
+            try:
+                for i in range(0, len(instructions), batch_size):
+                    batch_instructions = instructions[i:i+batch_size]
+
+                    tokenized = model_base.tokenize_instructions_fn(
+                        batch_instructions,
+                        include_trailing_whitespace=True
+                    )
+                    input_ids = tokenized['input_ids'].to(model.device)
+                    attention_mask = tokenized['attention_mask'].to(model.device)
+
+                    with torch.no_grad():
+                        outputs = model.generate(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            pad_token_id=tokenizer.pad_token_id,
+                            eos_token_id=tokenizer.eos_token_id,
+                        )
+
+                    for j, output in enumerate(outputs):
+                        prompt_length = input_ids[j].shape[0]
+                        completion_ids = output[prompt_length:]
+                        completion = tokenizer.decode(completion_ids, skip_special_tokens=True)
+
+                        completions.append({
+                            "prompt": batch_instructions[j],
+                            "response": completion,
+                            "category": "unknown"
+                        })
+            finally:
+                for handle in hook_handles:
+                    handle.remove()
+
+            return completions
+
+        model_base.generate_completions = generate_completions
+
+        return model_base
+    else:
+        # Standard loading
+        return construct_model_base(model_path)
+
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -41,7 +165,14 @@ def parse_arguments():
         '--model_path',
         type=str,
         default='unsloth/gpt-oss-20b-unsloth-bnb-4bit',
-        help='Path to the model'
+        help='Path to the base model'
+    )
+
+    parser.add_argument(
+        '--adapter_path',
+        type=str,
+        default=None,
+        help='Path to LoRA adapter checkpoint (optional, for fine-tuned models)'
     )
 
     parser.add_argument(
@@ -423,23 +554,31 @@ def run_expert_specific_pipeline(args):
     print("EXPERT-SPECIFIC REFUSAL VECTOR PIPELINE")
     print("="*80)
     print(f"Model: {args.model_path}")
+    if args.adapter_path:
+        print(f"Adapter: {args.adapter_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
     # Setup paths
-    model_alias = f"expert_specific_t{args.threshold}"
+    if args.adapter_path:
+        # Use adapter name in alias
+        adapter_name = Path(args.adapter_path).parent.name + "_" + Path(args.adapter_path).name
+        model_alias = f"expert_specific_t{args.threshold}_{adapter_name}"
+    else:
+        model_alias = f"expert_specific_t{args.threshold}"
+
     cfg = Config(model_alias=model_alias, model_path=args.model_path)
 
     # Create output directory
     output_dir = os.path.join(cfg.artifact_path(), f"threshold_{args.threshold}")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load model
+    # Load model (with optional adapter)
     print("\n" + "="*80)
     print("LOADING MODEL")
     print("="*80)
-    model_base = construct_model_base(args.model_path)
+    model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path)
 
     # Load datasets
     print("\n" + "="*80)

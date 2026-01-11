@@ -12,6 +12,35 @@ from jaxtyping import Float
 from torch import Tensor
 
 
+def get_model_layers(model_base):
+    """
+    Navigate model structure to get layers, handling PEFT wrapping.
+
+    Supports:
+    - Standard: model.model.layers
+    - PEFT: model.base_model.model.layers or model.model.model.layers
+    """
+    if hasattr(model_base, 'model'):
+        current = model_base.model
+
+        # Navigate through PEFT/wrapper layers
+        while hasattr(current, 'model') or hasattr(current, 'base_model'):
+            if hasattr(current, 'base_model'):
+                current = current.base_model
+            elif hasattr(current, 'model'):
+                current = current.model
+            else:
+                break
+
+            if hasattr(current, 'layers'):
+                return current.layers
+
+        if hasattr(current, 'layers'):
+            return current.layers
+
+    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+
+
 def get_expert_weighted_activation_addition_hook(
     direction: Float[Tensor, "d_model"],
     expert_id: int,
@@ -136,7 +165,8 @@ def get_expert_weighted_intervention_hooks(
         (fwd_pre_hooks, fwd_hooks) tuple
     """
     # Get the MLP module at the specified layer
-    mlp_module = model_base.model.model.layers[layer_idx].mlp
+    layers = get_model_layers(model_base)
+    mlp_module = layers[layer_idx].mlp
 
     # Create the weighted intervention hook
     hook_fn = get_expert_weighted_activation_addition_hook(

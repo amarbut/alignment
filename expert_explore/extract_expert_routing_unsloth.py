@@ -19,7 +19,7 @@ Usage:
         --checkpoint_dirs checkpoints/expert_dropout_0.0/final \
                          checkpoints/expert_dropout_0.3/final
 """
-
+import random
 import os
 import sys
 import torch
@@ -467,7 +467,7 @@ def main():
     harmless_data = load_dataset(args.harmless_dataset)
 
     harmful_prompts = [item["instruction"] for item in harmful_data]
-    harmless_prompts = [item["instruction"] for item in harmless_data]
+    harmless_prompts = [item["instruction"] for item in random.sample(harmless_data, 200)]
 
     print(f"Loaded {len(harmful_prompts)} harmful prompts")
     print(f"Loaded {len(harmless_prompts)} harmless prompts")
@@ -477,11 +477,20 @@ def main():
     if args.batch_checkpoints:
         if args.checkpoint_dirs is None:
             raise ValueError("--checkpoint_dirs required when using --batch_checkpoints")
-        checkpoints = [
-            (Path(d).name, d) for d in args.checkpoint_dirs
-        ]
+        checkpoints = []
+        for d in args.checkpoint_dirs:
+            # Include parent directory in name to avoid collisions (e.g., "dropout_0.0_final")
+            path = Path(d)
+            parent_name = path.parent.name
+            checkpoint_name = f"{parent_name}_{path.name}"
+            checkpoints.append((checkpoint_name, d))
     else:
-        checkpoint_name = Path(args.checkpoint_dir).name if args.checkpoint_dir else "base_model"
+        if args.checkpoint_dir:
+            # Include parent directory for single checkpoint too
+            path = Path(args.checkpoint_dir)
+            checkpoint_name = f"{path.parent.name}_{path.name}"
+        else:
+            checkpoint_name = "base_model"
         checkpoints = [(checkpoint_name, args.checkpoint_dir)]
 
     print(f"\nProcessing {len(checkpoints)} checkpoint(s)")

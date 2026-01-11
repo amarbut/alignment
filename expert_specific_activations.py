@@ -17,6 +17,38 @@ from pipeline.utils.hook_utils import add_hooks
 from pipeline.model_utils.model_base import ModelBase
 
 
+def get_model_layers(model_base):
+    """
+    Navigate model structure to get layers, handling PEFT wrapping.
+
+    Supports:
+    - Standard: model.model.layers
+    - PEFT: model.base_model.model.layers or model.model.model.layers
+    """
+    # Try direct access first
+    if hasattr(model_base, 'model'):
+        current = model_base.model
+
+        # Navigate through PEFT/wrapper layers
+        while hasattr(current, 'model') or hasattr(current, 'base_model'):
+            if hasattr(current, 'base_model'):
+                current = current.base_model
+            elif hasattr(current, 'model'):
+                current = current.model
+            else:
+                break
+
+            # Check if we've reached the layer container
+            if hasattr(current, 'layers'):
+                return current.layers
+
+        # Final check at current level
+        if hasattr(current, 'layers'):
+            return current.layers
+
+    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+
+
 def get_mlp_output_hook(
     layer: int,
     cache: Float[Tensor, "layer pos n d_model"],
@@ -66,9 +98,9 @@ def force_expert_via_bias(
     Returns:
         Original bias tensor (for restoration)
     """
-    # Navigate to the router
-    # model.model.layers[layer_idx].mlp.router
-    router = model_base.model.model.layers[layer_idx].mlp.router
+    # Navigate to the router (handling PEFT wrapping)
+    layers = get_model_layers(model_base)
+    router = layers[layer_idx].mlp.router
 
     # For unsloth models, bias is in router.linear.bias
     # For standard models, it's router.bias
@@ -98,7 +130,8 @@ def restore_router_bias(
     original_bias: Tensor
 ):
     """Restore original router bias."""
-    router = model_base.model.model.layers[layer_idx].mlp.router
+    layers = get_model_layers(model_base)
+    router = layers[layer_idx].mlp.router
 
     # For unsloth models, bias is in router.linear.bias
     # For standard models, it's router.bias
@@ -163,7 +196,8 @@ def get_expert_activations(
             inputs = tokenize_instructions_fn(instructions=instructions[start:end])
 
             # Hook only the specific MLP layer
-            mlp_module = model_base.model.model.layers[layer_idx].mlp
+            layers = get_model_layers(model_base)
+            mlp_module = layers[layer_idx].mlp
             fwd_hooks = [(
                 mlp_module,
                 get_mlp_output_hook(
