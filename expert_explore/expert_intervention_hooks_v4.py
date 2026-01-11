@@ -429,7 +429,7 @@ def print_intervention_summary_v4(config: ExpertInterventionConfigV4):
 
 # Load expert diffs
 try:
-    expert_diffs = json.load(open("expert_explore/oss_expert_diffs.json", "r"))
+    expert_diffs = json.load(open("expert_explore/unsloth_expert_diffs.json", "r"))
 except FileNotFoundError:
     expert_diffs = {}
     print("Warning: beavertails_expert_diffs.json not found")
