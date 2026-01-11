@@ -19,7 +19,7 @@ Usage:
         --checkpoint_dirs checkpoints/expert_dropout_0.0/final \
                          checkpoints/expert_dropout_0.3/final
 """
-
+import random
 import os
 import sys
 import torch
