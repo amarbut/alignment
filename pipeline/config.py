@@ -15,8 +15,8 @@ class Config:
     filter_val: bool = True
     evaluation_datasets: Tuple[str] = ("jailbreakbench",)
     max_new_tokens: int = 100
-    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2")
-    refusal_eval_methodologies: Tuple[str] = ("substring_matching") #llamaguard doesn't make sense, since it detects unsafe responses, not response vs. refusal
+    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2", "openai")
+    refusal_eval_methodologies: Tuple[str] = ("substring_matching", "openai") #llamaguard doesn't make sense, since it detects unsafe responses, not response vs. refusal
     ce_loss_batch_size: int = 2
     ce_loss_n_batches: int = 2048
 
