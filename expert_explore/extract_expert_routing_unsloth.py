@@ -34,7 +34,7 @@ alignment_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if alignment_dir not in sys.path:
     sys.path.insert(0, alignment_dir)
 
-import fix_hf_cache
+#import fix_hf_cache
 from unsloth import FastLanguageModel
 from peft import PeftModel
 
