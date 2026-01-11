@@ -13,6 +13,225 @@ import json
 from typing import Dict, Tuple
 
 
+def get_model_layers(model_base):
+    """
+    Navigate model structure to get layers, handling PEFT/unsloth wrapping.
+
+    Supports:
+    - Standard: model.model.layers
+    - PEFT: model.base_model.model.layers or model.model.model.layers
+    - Unsloth/quantized models with various wrapping
+    """
+    if hasattr(model_base, 'model'):
+        current = model_base.model
+
+        # Navigate through PEFT/wrapper layers
+        while hasattr(current, 'model') or hasattr(current, 'base_model'):
+            if hasattr(current, 'base_model'):
+                current = current.base_model
+            elif hasattr(current, 'model'):
+                current = current.model
+            else:
+                break
+
+            if hasattr(current, 'layers'):
+                return current.layers
+
+        if hasattr(current, 'layers'):
+            return current.layers
+
+    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+
+
+def get_router_weight_and_bias(router):
+    """
+    Safely get router weight and bias, handling different model implementations.
+
+    For unsloth/quantized models, the weight/bias might be wrapped or need
+    special handling. This function attempts multiple access patterns.
+
+    Returns:
+        tuple: (weight, bias, hidden_size, num_experts)
+    """
+    # Try direct access first (standard model)
+    try:
+        weight = router.weight
+        bias = router.bias
+        num_experts, hidden_size = weight.shape
+        return weight, bias, hidden_size, num_experts
+    except (AttributeError, RuntimeError):
+        pass
+
+    # Try through linear submodule (unsloth model)
+    try:
+        if hasattr(router, 'linear'):
+            weight = router.linear.weight
+            bias = router.linear.bias
+            num_experts, hidden_size = weight.shape
+            return weight, bias, hidden_size, num_experts
+    except Exception:
+        pass
+
+    # Try accessing through named_parameters with standard keys
+    try:
+        params = dict(router.named_parameters())
+        if 'weight' in params and 'bias' in params:
+            weight = params['weight']
+            bias = params['bias']
+            num_experts, hidden_size = weight.shape
+            return weight, bias, hidden_size, num_experts
+    except Exception:
+        pass
+
+    # Try accessing through named_parameters with 'linear.' prefix
+    try:
+        params = dict(router.named_parameters())
+        if 'linear.weight' in params and 'linear.bias' in params:
+            weight = params['linear.weight']
+            bias = params['linear.bias']
+            num_experts, hidden_size = weight.shape
+            return weight, bias, hidden_size, num_experts
+    except Exception:
+        pass
+
+    # Try accessing through state_dict
+    try:
+        state_dict = router.state_dict()
+        if 'weight' in state_dict and 'bias' in state_dict:
+            weight = state_dict['weight']
+            bias = state_dict['bias']
+            num_experts, hidden_size = weight.shape
+            return weight, bias, hidden_size, num_experts
+        elif 'linear.weight' in state_dict and 'linear.bias' in state_dict:
+            weight = state_dict['linear.weight']
+            bias = state_dict['linear.bias']
+            num_experts, hidden_size = weight.shape
+            return weight, bias, hidden_size, num_experts
+    except Exception:
+        pass
+
+    # Last resort: check router config
+    if hasattr(router, 'hidden_dim') and hasattr(router, 'num_experts'):
+        hidden_size = router.hidden_dim
+        num_experts = router.num_experts
+        # Create dummy tensors for calibration - we'll use config values instead
+        return None, None, hidden_size, num_experts
+
+    raise AttributeError(
+        f"Could not access router weight/bias for {type(router)}. "
+        f"Router attributes: {dir(router)}"
+    )
+
+
+def get_router_bias(router):
+    """
+    Safely get router bias parameter.
+
+    Returns:
+        torch.Tensor: The bias tensor
+    """
+    # Try direct access (standard model)
+    try:
+        return router.bias
+    except AttributeError:
+        pass
+
+    # Try through linear submodule (unsloth model)
+    try:
+        if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
+            return router.linear.bias
+    except Exception:
+        pass
+
+    # Try through named_parameters with 'bias' key
+    try:
+        params = dict(router.named_parameters())
+        if 'bias' in params:
+            return params['bias']
+    except Exception:
+        pass
+
+    # Try through named_parameters with 'linear.bias' key
+    try:
+        params = dict(router.named_parameters())
+        if 'linear.bias' in params:
+            return params['linear.bias']
+    except Exception:
+        pass
+
+    # Try through get_parameter
+    try:
+        return router.get_parameter('bias')
+    except Exception:
+        pass
+
+    raise AttributeError(
+        f"Could not access router bias for {type(router)}. "
+        f"Available parameters: {list(router.named_parameters() if hasattr(router, 'named_parameters') else [])}"
+    )
+
+
+def set_router_bias(router, bias_data):
+    """
+    Safely set router bias parameter.
+
+    Args:
+        router: The router module
+        bias_data: The bias tensor to set
+    """
+    # Try direct access (standard model)
+    try:
+        router.bias.data = bias_data
+        return
+    except AttributeError:
+        pass
+
+    # Try through linear submodule (unsloth model)
+    try:
+        if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
+            router.linear.bias.data = bias_data
+            return
+    except Exception:
+        pass
+
+    # Try through named_parameters with 'bias' key
+    try:
+        params = dict(router.named_parameters())
+        if 'bias' in params:
+            params['bias'].data = bias_data
+            return
+    except Exception:
+        pass
+
+    # Try through named_parameters with 'linear.bias' key
+    try:
+        params = dict(router.named_parameters())
+        if 'linear.bias' in params:
+            params['linear.bias'].data = bias_data
+            return
+    except Exception:
+        pass
+
+    # Last resort: use state_dict
+    try:
+        state_dict = router.state_dict()
+        if 'bias' in state_dict:
+            state_dict['bias'] = bias_data
+            router.load_state_dict(state_dict)
+            return
+        elif 'linear.bias' in state_dict:
+            state_dict['linear.bias'] = bias_data
+            router.load_state_dict(state_dict)
+            return
+    except Exception:
+        pass
+
+    raise AttributeError(
+        f"Could not set router bias for {type(router)}. "
+        f"Available parameters: {list(router.named_parameters() if hasattr(router, 'named_parameters') else [])}"
+    )
+
+
 class ExpertInterventionConfigV4:
     """Configuration for calibrated expert routing interventions."""
 
@@ -68,14 +287,31 @@ def calibrate_router_ranges(model_base, config: ExpertInterventionConfigV4):
         # Forward pass
         _ = model_base.model(input_ids)
 
+        # Get model layers (handles PEFT/unsloth wrapping)
+        layers = get_model_layers(model_base)
+
         # Measure router logit ranges
         for layer_idx in layers_to_calibrate:
-            router = model_base.model.model.layers[layer_idx].mlp.router
+            router = layers[layer_idx].mlp.router
+
+            # Get router weight and bias safely
+            weight, bias, hidden_size, num_experts = get_router_weight_and_bias(router)
 
             # Compute logits for a sample hidden state
-            hidden_size = router.weight.shape[1]
-            sample_hidden = torch.randn(1, hidden_size, device=router.weight.device, dtype=router.weight.dtype)
-            router_logits = torch.nn.functional.linear(sample_hidden, router.weight, router.bias)
+            if weight is not None:
+                # Use actual weight/bias
+                sample_hidden = torch.randn(1, hidden_size, device=weight.device, dtype=weight.dtype)
+                router_logits = torch.nn.functional.linear(sample_hidden, weight, bias)
+            else:
+                # Fallback: estimate from config (for fully quantized models)
+                # Use a reasonable default range based on typical router behavior
+                print(f"  Layer {layer_idx}: Using estimated range (weight not directly accessible)")
+                calibration_data[layer_idx] = {
+                    'min': -5.0,
+                    'max': 5.0,
+                    'range': 10.0
+                }
+                continue
 
             min_logit = router_logits.min().item()
             max_logit = router_logits.max().item()
@@ -106,6 +342,9 @@ def apply_expert_interventions_v4(model_base, config: ExpertInterventionConfigV4
 
     print("\nApplying bias modifications:")
 
+    # Get model layers (handles PEFT/unsloth wrapping)
+    layers = get_model_layers(model_base)
+
     layers_to_intervene = set(layer for layer, _ in config.interventions.keys())
 
     for layer_idx in layers_to_intervene:
@@ -113,10 +352,15 @@ def apply_expert_interventions_v4(model_base, config: ExpertInterventionConfigV4
         if not interventions:
             continue
 
-        router = model_base.model.model.layers[layer_idx].mlp.router
+        router = layers[layer_idx].mlp.router
 
-        # Save original bias
-        original_biases[layer_idx] = router.bias.data.clone()
+        # Save original bias using helper function
+        try:
+            bias = get_router_bias(router)
+            original_biases[layer_idx] = bias.data.clone()
+        except AttributeError as e:
+            print(f"  Warning: Could not access bias for layer {layer_idx}: {e}")
+            continue
 
         # Calculate adjustment strength
         if config.use_calibration and layer_idx in config.calibration_data:
@@ -130,14 +374,15 @@ def apply_expert_interventions_v4(model_base, config: ExpertInterventionConfigV4
             suppress_strength = -(2.0 + config.epsilon)
 
         # Apply bias modifications
-        modified_bias = router.bias.data.clone()
+        modified_bias = bias.data.clone()
         for expert_id, action in interventions.items():
             if action == 'force':
                 modified_bias[expert_id] += force_strength
             elif action == 'suppress':
                 modified_bias[expert_id] += suppress_strength
 
-        router.bias.data = modified_bias
+        # Set modified bias using helper function
+        set_router_bias(router, modified_bias)
 
         print(f"  Layer {layer_idx}: force=+{force_strength:.3f}, suppress={suppress_strength:.3f}")
 
@@ -146,9 +391,16 @@ def apply_expert_interventions_v4(model_base, config: ExpertInterventionConfigV4
 
 def remove_expert_interventions_v4(model_base, original_biases):
     """Remove interventions by restoring original biases."""
+    # Get model layers (handles PEFT/unsloth wrapping)
+    layers = get_model_layers(model_base)
+
     for layer_idx, original_bias in original_biases.items():
-        router = model_base.model.model.layers[layer_idx].mlp.router
-        router.bias.data = original_bias
+        router = layers[layer_idx].mlp.router
+        # Restore bias using helper function
+        try:
+            set_router_bias(router, original_bias)
+        except AttributeError as e:
+            print(f"  Warning: Could not restore bias for layer {layer_idx}: {e}")
 
 
 def print_intervention_summary_v4(config: ExpertInterventionConfigV4):
@@ -207,6 +459,91 @@ def get_select_experts_response_induction_config_v4(threshold: float, epsilon: f
                     config.suppress_expert(layer=int(layer), expert_id=exp[0])
                 elif exp[1] < 0:  # Harmless-preferred
                     config.force_expert(layer=int(layer), expert_id=exp[0])
+    return config
+
+
+def get_top_experts_all_layers_refusal_induction_config_v4(epsilon: float = 0.01, n_layers: int = 21):
+    """
+    For all layers: Force top harmful-preferred expert, suppress top harmless-preferred expert.
+
+    Dynamically identifies the expert with highest positive diff (most harmful-preferred)
+    and the expert with lowest negative diff (most harmless-preferred) for each layer.
+
+    Expected outcome: Should INCREASE refusal behavior on harmful prompts.
+
+    Args:
+        epsilon: Epsilon value for calibrated adjustment
+        n_layers: Number of layers in the model (default: 21 for GPT-OSS-20B)
+
+    Returns:
+        ExpertInterventionConfigV4 configured for refusal induction
+    """
+    config = ExpertInterventionConfigV4(epsilon=epsilon, use_calibration=True)
+
+    for layer in range(n_layers):
+        layer_str = str(layer)
+        if layer_str not in expert_diffs:
+            continue
+
+        experts = expert_diffs[layer_str]
+        if not experts:
+            continue
+
+        # Find expert with highest positive diff (most harmful-preferred)
+        harmful_experts = [e for e in experts if e[1] > 0]
+        if harmful_experts:
+            top_harmful = max(harmful_experts, key=lambda x: x[1])
+            config.force_expert(layer=layer, expert_id=top_harmful[0])
+
+        # Find expert with lowest negative diff (most harmless-preferred)
+        harmless_experts = [e for e in experts if e[1] < 0]
+        if harmless_experts:
+            top_harmless = min(harmless_experts, key=lambda x: x[1])
+            config.suppress_expert(layer=layer, expert_id=top_harmless[0])
+
+    return config
+
+
+def get_top_experts_all_layers_jailbreak_induction_config_v4(epsilon: float = 0.01, n_layers: int = 21):
+    """
+    For all layers: Force top harmless-preferred expert, suppress top harmful-preferred expert.
+
+    Dynamically identifies the expert with highest positive diff (most harmful-preferred)
+    and the expert with lowest negative diff (most harmless-preferred) for each layer,
+    then applies the opposite intervention to reduce refusal.
+
+    Expected outcome: Should DECREASE refusal behavior (more jailbreaks/compliance).
+
+    Args:
+        epsilon: Epsilon value for calibrated adjustment
+        n_layers: Number of layers in the model (default: 21 for GPT-OSS-20B)
+
+    Returns:
+        ExpertInterventionConfigV4 configured for jailbreak induction
+    """
+    config = ExpertInterventionConfigV4(epsilon=epsilon, use_calibration=True)
+
+    for layer in range(n_layers):
+        layer_str = str(layer)
+        if layer_str not in expert_diffs:
+            continue
+
+        experts = expert_diffs[layer_str]
+        if not experts:
+            continue
+
+        # Find expert with highest positive diff (most harmful-preferred) - SUPPRESS it
+        harmful_experts = [e for e in experts if e[1] > 0]
+        if harmful_experts:
+            top_harmful = max(harmful_experts, key=lambda x: x[1])
+            config.suppress_expert(layer=layer, expert_id=top_harmful[0])
+
+        # Find expert with lowest negative diff (most harmless-preferred) - FORCE it
+        harmless_experts = [e for e in experts if e[1] < 0]
+        if harmless_experts:
+            top_harmless = min(harmless_experts, key=lambda x: x[1])
+            config.force_expert(layer=layer, expert_id=top_harmless[0])
+
     return config
 
 
