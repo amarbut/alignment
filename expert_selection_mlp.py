@@ -38,6 +38,35 @@ from expert_intervention import (
 )
 
 
+def get_model_layers(model_base):
+    """
+    Navigate model structure to get layers, handling PEFT wrapping.
+
+    Supports:
+    - Standard: model.model.layers
+    - PEFT: model.base_model.model.layers or model.model.model.layers
+    """
+    if hasattr(model_base, 'model'):
+        current = model_base.model
+
+        # Navigate through PEFT/wrapper layers
+        while hasattr(current, 'model') or hasattr(current, 'base_model'):
+            if hasattr(current, 'base_model'):
+                current = current.base_model
+            elif hasattr(current, 'model'):
+                current = current.model
+            else:
+                break
+
+            if hasattr(current, 'layers'):
+                return current.layers
+
+        if hasattr(current, 'layers'):
+            return current.layers
+
+    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+
+
 def get_mlp_activation_addition_hook(
     direction: Float[Tensor, "d_model"],
     coeff: float = 1.0
@@ -193,7 +222,8 @@ def select_expert_direction(
             direction_vec = candidate_directions[source_pos, candidate_idx]
 
             # Get MLP module for this layer
-            mlp_module = model_base.model.model.layers[layer].mlp
+            layers = get_model_layers(model_base)
+            mlp_module = layers[layer].mlp
 
             # Use negative actAdd (induce refusal) instead of ablation
             # This should increase refusal on harmless without breaking the model
@@ -226,7 +256,8 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
-            mlp_module = model_base.model.model.layers[layer].mlp
+            layers = get_model_layers(model_base)
+            mlp_module = layers[layer].mlp
 
             # Use negative actAdd (reduce refusal)
             negative_add_hook = get_expert_weighted_activation_addition_hook(
@@ -251,7 +282,8 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             refusal_vector = candidate_directions[source_pos, candidate_idx]
-            mlp_module = model_base.model.model.layers[layer].mlp
+            layers = get_model_layers(model_base)
+            mlp_module = layers[layer].mlp
 
             # Add direction to MLP output, weighted by expert's routing probability
             addition_hook = get_expert_weighted_activation_addition_hook(

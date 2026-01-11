@@ -19,6 +19,15 @@ refusal specialization in specific experts.
 
 import os
 import sys
+
+# Add alignment directory to path
+alignment_dir = os.path.dirname(os.path.abspath(__file__))
+if alignment_dir not in sys.path:
+    sys.path.insert(0, alignment_dir)
+
+# Fix HF cache paths BEFORE importing any HF libraries
+import fix_hf_cache
+
 import torch
 import argparse
 from pathlib import Path
@@ -32,13 +41,9 @@ from transformers import (
     TrainingArguments,
     Trainer,
     DataCollatorForLanguageModeling,
+    BitsAndBytesConfig
 )
 from peft import LoraConfig, get_peft_model, TaskType
-
-# Add alignment directory to path
-alignment_dir = os.path.dirname(os.path.abspath(__file__))
-if alignment_dir not in sys.path:
-    sys.path.insert(0, alignment_dir)
 
 from expert_dropout import StochasticExpertDropout, PerTokenExpertDropout
 
@@ -69,7 +74,7 @@ def prepare_wildjailbreak_dataset(
     print(f"Loading WildJailbreak dataset (split: {split})...")
 
     # Load dataset
-    dataset = load_dataset("allenai/wildjailbreak", split=split)
+    dataset = load_dataset("allenai/wildjailbreak", split, split="train", delimiter="\t", keep_default_na=False)
 
     print(f"Loaded {len(dataset)} examples")
 
@@ -168,127 +173,90 @@ def setup_model_for_training(
     lora_dropout: float = 0.05,
 ):
     """
-    Configure model for one of three training modes.
+    Configure model for one of three training modes using LoRA/QLoRA.
 
     Args:
-        model: The model to configure
+        model: The quantized model to configure
         training_mode: One of 'router', 'expert', 'combined'
-        lora_rank: LoRA rank for expert training
+        lora_rank: LoRA rank
         lora_alpha: LoRA alpha parameter
         lora_dropout: LoRA dropout rate
 
     Returns:
-        Configured model (with PEFT if needed)
+        PEFT model with LoRA adapters
     """
-    num_layers = len(model.model.layers)
-    num_experts = model.config.num_local_experts
-
     print(f"\n{'='*80}")
     print(f"SETTING UP MODEL FOR {training_mode.upper()} TRAINING")
     print(f"{'='*80}")
 
     if training_mode == "router":
-        print("\nMode: ROUTER-ONLY")
-        print("Training: Router parameters only")
-        print("Frozen: All expert weights, attention, embeddings")
+        print("\nMode: ROUTER-ONLY (Full Parameters)")
+        print("Training: Router parameters directly (via modules_to_save)")
+        print("Frozen: All expert weights, attention, embeddings (quantized)")
 
-        # Freeze everything first
-        for param in model.parameters():
-            param.requires_grad = False
-
-        # Unfreeze only router parameters
-        trainable_params = 0
-        for layer_idx in range(num_layers):
-            router = model.model.layers[layer_idx].mlp.router
-            for param in router.parameters():
-                param.requires_grad = True
-                trainable_params += param.numel()
-
-        print(f"\nTrainable parameters: {trainable_params:,}")
-        print(f"Router params per layer: {trainable_params // num_layers:,}")
-
-        return model
+        # For router-only, we use modules_to_save to make router parameters trainable
+        # Router is a GptOssTopKRouter, not a Linear layer, so we can't use standard LoRA
+        # We need to provide target_modules for PEFT, but we'll use r=1 to make it negligible
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=1,  # Minimal rank - we're not actually training these
+            lora_alpha=2,
+            lora_dropout=0.0,
+            target_modules=["q_proj", "v_proj"],  # Minimal LoRA on attention (will be frozen)
+            modules_to_save=["router"],  # Train router parameters directly
+            bias="none",
+            inference_mode=False,
+        )
 
     elif training_mode == "expert":
-        print("\nMode: EXPERT-ONLY")
-        print("Training: Expert weights only (via LoRA)")
-        print("Frozen: Routers, attention, embeddings")
+        print("\nMode: EXPERT-ONLY (LoRA)")
+        print("Training: LoRA adapters on expert weights only")
+        print("Frozen: Routers, attention, embeddings (quantized)")
+        print("\nNote: OSS-20B uses fused experts (gate_up_proj, down_proj).")
 
-        # Apply LoRA to expert projections only
-        # Target all expert linear layers: gate_proj, up_proj, down_proj
-        target_modules = []
-        for layer_idx in range(num_layers):
-            for expert_idx in range(num_experts):
-                target_modules.extend([
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj",
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj",
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj",
-                ])
-
-        print(f"\nApplying LoRA to {len(target_modules)} expert projections...")
-        print(f"LoRA rank: {lora_rank}")
-        print(f"LoRA alpha: {lora_alpha}")
-
+        # Configure LoRA to target only expert layers
         lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=target_modules,
             lora_dropout=lora_dropout,
+            target_modules=["gate_up_proj", "down_proj"],  # Only expert weights
             bias="none",
-            task_type=TaskType.CAUSAL_LM
         )
-
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-
-        return model
 
     elif training_mode == "combined":
-        print("\nMode: COMBINED")
-        print("Training: Both routers AND expert weights (via LoRA)")
-        print("Frozen: Attention, embeddings")
+        print("\nMode: COMBINED (LoRA)")
+        print("Training: LoRA adapters on both routers AND expert weights")
+        print("Frozen: Attention, embeddings (quantized)")
 
-        # Apply LoRA to experts
-        target_modules = []
-        for layer_idx in range(num_layers):
-            for expert_idx in range(num_experts):
-                target_modules.extend([
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj",
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj",
-                    f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj",
-                ])
-
-        print(f"\nApplying LoRA to {len(target_modules)} expert projections...")
-        print(f"LoRA rank: {lora_rank}")
-        print(f"LoRA alpha: {lora_alpha}")
-
+        # Configure LoRA to target both routers and experts
         lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=target_modules,
             lora_dropout=lora_dropout,
+            target_modules=["router", "gate_up_proj", "down_proj"],  # Both
             bias="none",
-            task_type=TaskType.CAUSAL_LM,
-            modules_to_save=None  # Don't auto-save router, we'll handle manually
         )
-
-        model = get_peft_model(model, lora_config)
-
-        # Additionally unfreeze routers
-        trainable_router_params = 0
-        for layer_idx in range(num_layers):
-            router = model.base_model.model.model.layers[layer_idx].mlp.router
-            for param in router.parameters():
-                param.requires_grad = True
-                trainable_router_params += param.numel()
-
-        print(f"\nAlso unfreezing {trainable_router_params:,} router parameters")
-        model.print_trainable_parameters()
-
-        return model
 
     else:
         raise ValueError(f"Unknown training mode: {training_mode}")
+
+    # Apply LoRA to the model
+    model = get_peft_model(model, lora_config)
+
+    # For router-only mode, freeze the LoRA attention parameters
+    # We only want to train the router modules_to_save
+    if training_mode == "router":
+        for name, param in model.named_parameters():
+            if "lora_" in name:  # Freeze all LoRA adapters
+                param.requires_grad = False
+        print("\nFroze LoRA attention adapters - only training router parameters")
+
+    # Print trainable parameter counts
+    model.print_trainable_parameters()
+
+    return model
 
 
 class ExpertDropoutTrainer(Trainer):
@@ -514,12 +482,33 @@ def main():
 
     # Load model
     print(f"\nLoading model: {args.model_name}")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-        device_map="auto",
-    )
+
+    # Check if model is already quantized (e.g., unsloth pre-quantized models)
+    if "unsloth" in args.model_name.lower() or "-bnb-" in args.model_name.lower():
+        print("Loading pre-quantized model (no quantization_config needed)...")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            torch_dtype="auto",
+            trust_remote_code=True,
+            device_map="auto",
+        )
+    else:
+        print("Loading model with BitsAndBytes quantization...")
+        # Load the quantized model - we'll use LoRA for training
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4", # training-friendly 4-bit
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            torch_dtype="auto",
+            trust_remote_code=True,
+            device_map="auto",
+            quantization_config=bnb_config,
+        )
 
     # Enable gradient checkpointing to save memory
     model.gradient_checkpointing_enable()
@@ -554,7 +543,8 @@ def main():
     print("="*80)
 
     # Determine layers to exclude
-    num_layers = len(model.model.layers) if args.training_mode == "router" else len(model.base_model.model.model.layers)
+    # All modes now use PEFT, so access base model
+    num_layers = len(model.base_model.model.model.layers)
     exclude_layers = []
 
     if args.exclude_first_n_layers > 0:
@@ -564,8 +554,8 @@ def main():
         exclude_layers.extend(range(num_layers - args.exclude_last_n_layers, num_layers))
 
     # Create dropout module
-    # Note: For PEFT models, we need to access the base model
-    dropout_model = model if args.training_mode == "router" else model.base_model.model
+    # For PEFT models, we need to access the base model
+    dropout_model = model.base_model.model
 
     DropoutClass = PerTokenExpertDropout if args.use_per_token_dropout else StochasticExpertDropout
 
@@ -593,7 +583,6 @@ def main():
         seed=args.seed,
         dataloader_num_workers=4,
         remove_unused_columns=False,
-        evaluation_strategy="no",
         # Optimizer settings
         optim="adamw_torch",
         weight_decay=0.01,
