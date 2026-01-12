@@ -690,8 +690,10 @@ def run_expert_specific_pipeline(args):
         )
     else:
         print("\nSkipping generation, loading from cache...")
-        directions_path = os.path.join(output_dir, "expert_directions", "all_expert_directions.pt")
+        cache_dir = base_output_dir if args.skip_select else output_dir
+        directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
         expert_directions = torch.load(directions_path)
+
 
     # Select best direction(s)
     if not args.skip_select:
