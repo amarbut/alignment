@@ -620,7 +620,14 @@ def run_expert_specific_pipeline(args):
     cfg = Config(model_alias=model_alias, model_path=args.model_path)
 
     # Create output directory
-    output_dir = os.path.join(cfg.artifact_path(), f"threshold_{args.threshold}")
+    base_output_dir = os.path.join(cfg.artifact_path(), f"threshold_{args.threshold}")
+
+    # If skip_select and top_n > 1, use subdirectory for this specific top_n evaluation
+    if args.skip_select and args.top_n > 1:
+        output_dir = os.path.join(base_output_dir, f"top_{args.top_n}_eval")
+    else:
+        output_dir = base_output_dir
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Load model (with optional adapter)
@@ -748,29 +755,71 @@ def run_expert_specific_pipeline(args):
 
     else:
         print("\nSkipping selection, loading from cache...")
-        with open(os.path.join(output_dir, "direction_metadata.json"), 'r') as f:
-            metadata = json.load(f)
 
-        # Load based on top_n in metadata
-        if metadata.get("top_n", 1) == 1:
+        # Load from base_output_dir (where the cached data is)
+        cache_dir = base_output_dir if args.skip_select else output_dir
+
+        # Load filtered evaluations JSON
+        evaluations_path = os.path.join(cache_dir, "selection", "expert_direction_evaluations_filtered.json")
+        with open(evaluations_path, 'r') as f:
+            filtered_evals = json.load(f)
+
+        # Load all expert directions
+        all_directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
+        all_expert_directions = torch.load(all_directions_path)
+
+        # Load mu_b
+        mu_b = torch.zeros(list(all_expert_directions.values())[0].size(-1))
+
+        # Take top n from filtered evaluations
+        n_to_load = min(args.top_n, len(filtered_evals))
+
+        if n_to_load < args.top_n:
+            print(f"Warning: Requested top_n={args.top_n} but only {len(filtered_evals)} directions available")
+
+        if args.top_n == 1:
             # Single direction
-            pos = metadata["pos"]
-            layer = metadata["layer"]
-            expert_id = metadata["expert_id"]
-            direction = torch.load(os.path.join(output_dir, "direction.pt"))
-            mu_b = torch.load(os.path.join(output_dir, "mu_b.pt"))
+            entry = filtered_evals[0]
+            pos = entry["position"]
+            layer = entry["layer"]
+            expert_id = entry["expert"]
+
+            # Load full direction tensor and extract the specific position
+            full_direction = all_expert_directions[(layer, expert_id)]
+            direction = full_direction[pos]
+
+            print(f"\nLoaded direction from JSON:")
+            print(f"  Position: {pos}")
+            print(f"  Layer: {layer}")
+            print(f"  Expert: {expert_id}")
+            print(f"  Refusal score: {entry['refusal_score']:.4f}")
+            print(f"  Steering score: {entry['steering_score']:.4f}")
+            print(f"  KL Divergence: {entry['kl_div_score']:.4f}")
+
         else:
             # Multiple directions
-            directions_dict = torch.load(os.path.join(output_dir, "directions.pt"))
-            mu_b = torch.load(os.path.join(output_dir, "mu_b.pt"))
-
             selected_directions = []
-            for i, dir_meta in enumerate(metadata["directions"]):
-                pos = dir_meta["pos"]
-                layer = dir_meta["layer"]
-                expert_id = dir_meta["expert_id"]
-                direction = directions_dict[f"direction_{i}"]
+
+            print(f"\nLoading top {n_to_load} directions from JSON:")
+            for i in range(n_to_load):
+                entry = filtered_evals[i]
+                pos = entry["position"]
+                layer = entry["layer"]
+                expert_id = entry["expert"]
+
+                # Load full direction tensor and extract the specific position
+                full_direction = all_expert_directions[(layer, expert_id)]
+                direction = full_direction[pos]
+
                 selected_directions.append((pos, layer, expert_id, direction))
+
+                print(f"\n  [{i+1}/{n_to_load}]")
+                print(f"    Position: {pos}")
+                print(f"    Layer: {layer}")
+                print(f"    Expert: {expert_id}")
+                print(f"    Refusal score: {entry['refusal_score']:.4f}")
+                print(f"    Steering score: {entry['steering_score']:.4f}")
+                print(f"    KL Divergence: {entry['kl_div_score']:.4f}")
 
     # Evaluation
     if not args.skip_eval:
