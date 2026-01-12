@@ -209,6 +209,12 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        '--skip_baseline',
+        action='store_true',
+        help='Skip eval on baseline model'
+    )
+
+    parser.add_argument(
         '--n_train',
         type=int,
         default=500,
@@ -783,37 +789,37 @@ def run_expert_specific_pipeline(args):
                 (layer, expert_id, direction.to(model_base.model.device, dtype=model_base.model.dtype))
                 for _, layer, expert_id, direction in selected_directions
             ]
-
-        # Baseline (no intervention)
-        print("\n" + "-"*80)
-        print("BASELINE (No Intervention)")
-        print("-"*80)
-
-        # Harmful test set
-        for dataset_name in cfg.evaluation_datasets:
+        if not args.skip_baseline:
+            # Baseline (no intervention)
+            print("\n" + "-"*80)
+            print("BASELINE (No Intervention)")
+            print("-"*80)
+    
+            # Harmful test set
+            for dataset_name in cfg.evaluation_datasets:
+                generate_and_evaluate_completions(
+                    model_base,
+                    dataset_name,
+                    expert_info,
+                    coeff=0.0,  # No intervention
+                    output_dir=output_dir,
+                    intervention_label='baseline',
+                    eval_methodologies=cfg.jailbreak_eval_methodologies,
+                    max_new_tokens=args.max_new_tokens
+                )
+    
+            # Harmless test set
             generate_and_evaluate_completions(
                 model_base,
-                dataset_name,
+                'harmless',
                 expert_info,
-                coeff=0.0,  # No intervention
+                coeff=0.0,
                 output_dir=output_dir,
                 intervention_label='baseline',
-                eval_methodologies=cfg.jailbreak_eval_methodologies,
-                max_new_tokens=args.max_new_tokens
+                eval_methodologies=cfg.refusal_eval_methodologies,
+                max_new_tokens=args.max_new_tokens,
+                dataset=harmless_test
             )
-
-        # Harmless test set
-        generate_and_evaluate_completions(
-            model_base,
-            'harmless',
-            expert_info,
-            coeff=0.0,
-            output_dir=output_dir,
-            intervention_label='baseline',
-            eval_methodologies=cfg.refusal_eval_methodologies,
-            max_new_tokens=args.max_new_tokens,
-            dataset=harmless_test
-        )
 
         # ActAdd intervention (suppress refusal)
         print("\n" + "-"*80)
