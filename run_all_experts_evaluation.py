@@ -5,18 +5,26 @@ Evaluate steering interventions for all experts (or a specified subset).
 This script generates steering vectors for multiple experts and evaluates each one,
 allowing you to validate that your selection process identifies better-than-random experts.
 
+Evaluation Modes:
+    - jailbreak: Suppress refusal on harmful prompts (negative coefficient)
+    - refusal: Induce refusal on harmless prompts (positive coefficient)
+    - both: Run both jailbreak and refusal evaluations
+
 Usage:
-    # Evaluate all experts in specific layers
-    python run_all_experts_evaluation.py --layers 10 11 12
+    # Jailbreak evaluation (original): test on harmful prompts
+    python run_all_experts_evaluation.py --random_sample 50 --eval_mode jailbreak
 
-    # Evaluate all experts in all layers
-    python run_all_experts_evaluation.py --all_layers
+    # Refusal induction: test on harmless prompts (opposite intervention)
+    python run_all_experts_evaluation.py --random_sample 50 --eval_mode refusal --n_test 100
 
-    # Evaluate a random sample
-    python run_all_experts_evaluation.py --random_sample 50
+    # Run both modes
+    python run_all_experts_evaluation.py --random_sample 50 --eval_mode both
+
+    # Reuse expert list from previous run
+    python run_all_experts_evaluation.py --expert_list pipeline/runs/all_experts_evaluation/expert_list.json --eval_mode refusal
 
     # Resume from previous run
-    python run_all_experts_evaluation.py --layers 10 11 12 --resume
+    python run_all_experts_evaluation.py --layers 10 11 12 --resume --eval_mode jailbreak
 """
 
 import torch
@@ -129,6 +137,15 @@ def parse_arguments():
         help='Datasets to evaluate on'
     )
 
+    parser.add_argument(
+        '--eval_mode',
+        type=str,
+        choices=['jailbreak', 'refusal', 'both'],
+        default='jailbreak',
+        help='Evaluation mode: jailbreak (test on harmful, suppress refusal), '
+             'refusal (test on harmless, induce refusal), or both'
+    )
+
     return parser.parse_args()
 
 
@@ -195,22 +212,30 @@ def load_and_sample_datasets(cfg):
     return harmful_train, harmless_train, harmful_test, harmless_test
 
 
-def is_expert_completed(output_dir: Path, layer: int, expert_id: int) -> bool:
+def is_expert_completed(output_dir: Path, layer: int, expert_id: int, eval_mode: str = 'jailbreak') -> bool:
     """Check if an expert has already been evaluated."""
     expert_dir = output_dir / f"layer_{layer}" / f"expert_{expert_id}"
+
+    # Determine intervention label and dataset based on mode
+    if eval_mode == 'refusal':
+        intervention_label = 'refusal_induction'
+        dataset_name = 'harmless'
+    else:  # jailbreak
+        intervention_label = 'actadd'
+        dataset_name = 'jailbreakbench'
 
     # Check if any position has been evaluated (position-specific structure)
     # We check for pos_0 through pos_4 (5 positions)
     for pos in range(5):
         pos_dir = expert_dir / f"pos_{pos}"
-        eval_file = pos_dir / "completions" / "actadd" / "jailbreakbench_evaluations.json"
+        eval_file = pos_dir / "completions" / intervention_label / f"{dataset_name}_evaluations.json"
         if eval_file.exists():
             # If any position is completed, consider it done (for resume purposes)
             # Full check would verify all 5 positions, but this is simpler
             return True
 
     # Also check non-position-specific structure for backward compatibility
-    eval_file = expert_dir / "completions" / "actadd" / "jailbreakbench_evaluations.json"
+    eval_file = expert_dir / "completions" / intervention_label / f"{dataset_name}_evaluations.json"
     return eval_file.exists()
 
 
@@ -249,12 +274,17 @@ def evaluate_expert(
     coeff: float,
     max_new_tokens: int,
     eval_datasets: List[str],
-    eval_methodologies: List[str]
+    eval_methodologies_jailbreak: List[str],
+    eval_methodologies_refusal: List[str],
+    eval_mode: str = 'jailbreak'
 ):
     """
     Run intervention and evaluation for a single expert.
 
     If direction is position-specific [n_pos, d_model], evaluates each position separately.
+
+    Args:
+        eval_mode: 'jailbreak', 'refusal', or 'both'
     """
 
     # Check if direction is position-specific
@@ -279,7 +309,9 @@ def evaluate_expert(
                 coeff=coeff,
                 max_new_tokens=max_new_tokens,
                 eval_datasets=eval_datasets,
-                eval_methodologies=eval_methodologies
+                eval_methodologies_jailbreak=eval_methodologies_jailbreak,
+                eval_methodologies_refusal=eval_methodologies_refusal,
+                eval_mode=eval_mode
             )
     else:
         # Single direction [d_model]
@@ -296,7 +328,9 @@ def evaluate_expert(
             coeff=coeff,
             max_new_tokens=max_new_tokens,
             eval_datasets=eval_datasets,
-            eval_methodologies=eval_methodologies
+            eval_methodologies_jailbreak=eval_methodologies_jailbreak,
+            eval_methodologies_refusal=eval_methodologies_refusal,
+            eval_mode=eval_mode
         )
 
 
@@ -312,7 +346,9 @@ def evaluate_expert_single_direction(
     coeff: float,
     max_new_tokens: int,
     eval_datasets: List[str],
-    eval_methodologies: List[str]
+    eval_methodologies_jailbreak: List[str],
+    eval_methodologies_refusal: List[str],
+    eval_mode: str = 'jailbreak'
 ):
     """Evaluate a single direction for an expert (at a specific position)."""
 
@@ -332,7 +368,8 @@ def evaluate_expert_single_direction(
         "layer": layer,
         "expert_id": expert_id,
         "position": position,
-        "coeff": coeff
+        "coeff": coeff,
+        "eval_mode": eval_mode
     }
     with open(expert_dir / "metadata.json", 'w') as f:
         json.dump(metadata, f, indent=2)
@@ -340,52 +377,104 @@ def evaluate_expert_single_direction(
     # Move direction to correct device/dtype
     direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
 
-    # Run interventions and evaluations
-    for dataset_name in eval_datasets:
-        # ActAdd intervention (suppress refusal)
+    # Determine which modes to run
+    modes_to_run = []
+    if eval_mode == 'both':
+        modes_to_run = ['jailbreak', 'refusal']
+    else:
+        modes_to_run = [eval_mode]
+
+    # Run interventions and evaluations for each mode
+    for mode in modes_to_run:
+        if mode == 'jailbreak':
+            # Jailbreak mode: suppress refusal on harmful prompts
+            intervention_coeff = -coeff  # Negative to suppress refusal
+            intervention_label = "actadd"
+            test_datasets = eval_datasets
+            methodologies = eval_methodologies_jailbreak
+
+        else:  # refusal mode
+            # Refusal mode: induce refusal on harmless prompts
+            intervention_coeff = +coeff  # Positive to induce refusal
+            intervention_label = "refusal_induction"
+            test_datasets = ['harmless']
+            methodologies = eval_methodologies_refusal
+
+        # Get intervention hooks
         fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
             model_base,
             layer_idx=layer,
             expert_id=expert_id,
             direction=direction,
-            coeff=-coeff  # Negative to suppress refusal
+            coeff=intervention_coeff
         )
 
-        # Generate completions
-        dataset = load_dataset(dataset_name)
-        completions = model_base.generate_completions(
-            dataset,
-            fwd_pre_hooks=fwd_pre_hooks,
-            fwd_hooks=fwd_hooks,
-            max_new_tokens=max_new_tokens
-        )
+        # Evaluate on each dataset for this mode
+        for dataset_name in test_datasets:
+            # Generate completions
+            if dataset_name == 'harmless':
+                dataset = harmless_test
+            else:
+                dataset = load_dataset(dataset_name)
 
-        # Save and evaluate
-        completions_dir = expert_dir / "completions" / "actadd"
-        completions_dir.mkdir(parents=True, exist_ok=True)
+            completions = model_base.generate_completions(
+                dataset,
+                fwd_pre_hooks=fwd_pre_hooks,
+                fwd_hooks=fwd_hooks,
+                max_new_tokens=max_new_tokens
+            )
 
-        completions_path = completions_dir / f"{dataset_name}_completions.json"
-        with open(completions_path, "w", encoding="utf-8") as f:
-            json.dump(completions, f, indent=4, ensure_ascii=False)
+            # Save and evaluate
+            completions_dir = expert_dir / "completions" / intervention_label
+            completions_dir.mkdir(parents=True, exist_ok=True)
 
-        eval_path = completions_dir / f"{dataset_name}_evaluations.json"
-        evaluation = evaluate_jailbreak(
-            completions=completions,
-            methodologies=eval_methodologies,
-            evaluation_path=str(eval_path)
-        )
+            completions_path = completions_dir / f"{dataset_name}_completions.json"
+            with open(completions_path, "w", encoding="utf-8") as f:
+                json.dump(completions, f, indent=4, ensure_ascii=False)
 
-        asr = evaluation.get('substring_matching_success_rate', 'N/A')
-        if position is not None:
-            print(f"    {dataset_name} - ASR: {asr}")
-        else:
-            print(f"{dataset_name} - ASR: {asr}")
+            eval_path = completions_dir / f"{dataset_name}_evaluations.json"
+            evaluation = evaluate_jailbreak(
+                completions=completions,
+                methodologies=methodologies,
+                evaluation_path=str(eval_path)
+            )
+
+            # Print appropriate metric
+            if mode == 'jailbreak':
+                metric = evaluation.get('substring_matching_success_rate', 'N/A')
+                metric_name = "ASR"
+            else:  # refusal
+                metric = evaluation.get('substring_matching_success_rate', 'N/A')
+                metric_name = "False Refusal Rate"
+
+            if position is not None:
+                print(f"    [{mode}] {dataset_name} - {metric_name}: {metric}")
+            else:
+                print(f"[{mode}] {dataset_name} - {metric_name}: {metric}")
 
 
-def generate_summary_report(output_dir: Path, expert_list: List[Tuple[int, int]]):
+def generate_summary_report(output_dir: Path, expert_list: List[Tuple[int, int]], eval_mode: str = 'jailbreak'):
     """Generate summary comparing all evaluated experts (across all positions)."""
 
     results = []
+
+    # Determine paths based on eval_mode
+    if eval_mode == 'refusal':
+        intervention_label = 'refusal_induction'
+        dataset_name = 'harmless'
+        metric_name = 'False Refusal Rate'
+    elif eval_mode == 'both':
+        # For 'both', we'll create separate summaries
+        print("\n" + "="*80)
+        print("GENERATING SUMMARIES FOR BOTH MODES")
+        print("="*80)
+        jailbreak_results = generate_summary_report(output_dir, expert_list, 'jailbreak')
+        refusal_results = generate_summary_report(output_dir, expert_list, 'refusal')
+        return {'jailbreak': jailbreak_results, 'refusal': refusal_results}
+    else:  # jailbreak
+        intervention_label = 'actadd'
+        dataset_name = 'jailbreakbench'
+        metric_name = 'ASR'
 
     for layer, expert_id in expert_list:
         expert_dir = output_dir / f"layer_{layer}" / f"expert_{expert_id}"
@@ -393,7 +482,7 @@ def generate_summary_report(output_dir: Path, expert_list: List[Tuple[int, int]]
         # Check for position-specific results
         for pos in range(5):  # 5 positions
             pos_dir = expert_dir / f"pos_{pos}"
-            eval_file = pos_dir / "completions" / "actadd" / "jailbreakbench_evaluations.json"
+            eval_file = pos_dir / "completions" / intervention_label / f"{dataset_name}_evaluations.json"
 
             if eval_file.exists():
                 with open(eval_file, 'r') as f:
@@ -403,13 +492,14 @@ def generate_summary_report(output_dir: Path, expert_list: List[Tuple[int, int]]
                     "layer": layer,
                     "expert_id": expert_id,
                     "position": pos,
-                    "substring_matching_asr": evaluation.get("substring_matching_success_rate", None),
-                    "llamaguard2_asr": evaluation.get("llamaguard2_success_rate", None),
-                    "openai_asr": evaluation.get("openai_success_rate", None),
+                    "eval_mode": eval_mode,
+                    "substring_matching_rate": evaluation.get("substring_matching_success_rate", None),
+                    "llamaguard2_rate": evaluation.get("llamaguard2_success_rate", None),
+                    "openai_rate": evaluation.get("openai_success_rate", None),
                 })
 
         # Also check non-position-specific (backward compatibility)
-        eval_file = expert_dir / "completions" / "actadd" / "jailbreakbench_evaluations.json"
+        eval_file = expert_dir / "completions" / intervention_label / f"{dataset_name}_evaluations.json"
         if eval_file.exists():
             with open(eval_file, 'r') as f:
                 evaluation = json.load(f)
@@ -418,34 +508,37 @@ def generate_summary_report(output_dir: Path, expert_list: List[Tuple[int, int]]
                 "layer": layer,
                 "expert_id": expert_id,
                 "position": None,
-                "substring_matching_asr": evaluation.get("substring_matching_success_rate", None),
-                "llamaguard2_asr": evaluation.get("llamaguard2_success_rate", None),
-                "openai_asr": evaluation.get("openai_success_rate", None),
+                "eval_mode": eval_mode,
+                "substring_matching_rate": evaluation.get("substring_matching_success_rate", None),
+                "llamaguard2_rate": evaluation.get("llamaguard2_success_rate", None),
+                "openai_rate": evaluation.get("openai_success_rate", None),
             })
 
-    # Sort by substring matching ASR (descending)
-    results.sort(key=lambda x: x["substring_matching_asr"] if x["substring_matching_asr"] is not None else -1, reverse=True)
+    # Sort by substring matching rate (descending)
+    results.sort(key=lambda x: x["substring_matching_rate"] if x["substring_matching_rate"] is not None else -1, reverse=True)
 
     # Save full results
-    summary_path = output_dir / "summary_all_experts.json"
+    summary_path = output_dir / f"summary_all_experts_{eval_mode}.json"
     with open(summary_path, 'w') as f:
         json.dump(results, f, indent=2)
 
     print("\n" + "="*80)
-    print("SUMMARY REPORT")
+    print(f"SUMMARY REPORT - {eval_mode.upper()} MODE")
     print("="*80)
     print(f"\nTotal candidates evaluated: {len(results)}")
-    print(f"\nTop 10 candidates by substring matching ASR:")
+    print(f"\nTop 10 candidates by substring matching {metric_name}:")
     for i, result in enumerate(results[:10], 1):
         pos_str = f", Pos {result['position']}" if result['position'] is not None else ""
+        rate = result['substring_matching_rate']
         print(f"{i:2d}. Layer {result['layer']:2d}, Expert {result['expert_id']:2d}{pos_str}: "
-              f"ASR = {result['substring_matching_asr']:.2%}")
+              f"{metric_name} = {rate:.2%}")
 
-    print(f"\nBottom 10 candidates by substring matching ASR:")
+    print(f"\nBottom 10 candidates by substring matching {metric_name}:")
     for i, result in enumerate(results[-10:], 1):
         pos_str = f", Pos {result['position']}" if result['position'] is not None else ""
+        rate = result['substring_matching_rate']
         print(f"{i:2d}. Layer {result['layer']:2d}, Expert {result['expert_id']:2d}{pos_str}: "
-              f"ASR = {result['substring_matching_asr']:.2%}")
+              f"{metric_name} = {rate:.2%}")
 
     print(f"\nFull results saved to: {summary_path}")
 
@@ -475,7 +568,7 @@ def main():
         original_count = len(expert_list)
         expert_list = [
             (layer, expert_id) for layer, expert_id in expert_list
-            if not is_expert_completed(output_dir, layer, expert_id)
+            if not is_expert_completed(output_dir, layer, expert_id, args.eval_mode)
         ]
         skipped = original_count - len(expert_list)
         if skipped > 0:
@@ -484,7 +577,7 @@ def main():
 
     if len(expert_list) == 0:
         print("\nAll experts already evaluated!")
-        generate_summary_report(output_dir, get_expert_list(args))
+        generate_summary_report(output_dir, get_expert_list(args), args.eval_mode)
         return
 
     # Load model
@@ -537,7 +630,9 @@ def main():
                 coeff=args.coeff,
                 max_new_tokens=args.max_new_tokens,
                 eval_datasets=args.eval_datasets,
-                eval_methodologies=cfg.jailbreak_eval_methodologies
+                eval_methodologies_jailbreak=cfg.jailbreak_eval_methodologies,
+                eval_methodologies_refusal=cfg.refusal_eval_methodologies,
+                eval_mode=args.eval_mode
             )
 
         except Exception as e:
@@ -550,12 +645,13 @@ def main():
     print("\n" + "="*80)
     print("GENERATING SUMMARY")
     print("="*80)
-    generate_summary_report(output_dir, get_expert_list(args))
+    generate_summary_report(output_dir, get_expert_list(args), args.eval_mode)
 
     print("\n" + "="*80)
     print("EVALUATION COMPLETE")
     print("="*80)
     print(f"Results saved to: {output_dir}")
+    print(f"Evaluation mode: {args.eval_mode}")
 
 
 if __name__ == "__main__":

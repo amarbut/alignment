@@ -18,8 +18,9 @@ Interventions tested:
 5. L13 Response Induction: Force E21, Suppress E0
 6. Combined Refusal Induction (both layers)
 7. Combined Response Induction (both layers)
-8. All Layers Refusal/Response Induction
-9. Select Experts (threshold-based) Refusal/Response Induction
+8. Top Experts Refusal: Force top harmful expert, suppress top harmless expert at each layer
+9. Top Experts Jailbreak: Force top harmless expert, suppress top harmful expert at each layer
+10. Select Experts (threshold-based) Refusal/Response Induction
 """
 
 import os
@@ -50,7 +51,9 @@ from expert_explore.expert_intervention_hooks_v4 import (
     get_combined_refusal_induction_config_v4,
     get_combined_response_induction_config_v4,
     get_select_experts_refusal_induction_config_v4,
-    get_select_experts_response_induction_config_v4
+    get_select_experts_response_induction_config_v4,
+    get_top_experts_all_layers_refusal_induction_config_v4,
+    get_top_experts_all_layers_jailbreak_induction_config_v4
 )
 
 from pipeline.run_pipeline_subspace import (
@@ -91,7 +94,7 @@ def parse_arguments():
         type=str,
         nargs='+',
         default=['all'],
-        help='Which layers to test: all, all_layers, l10, l13, select_experts, combined'
+        help='Which layers to test: all, all_layers, top_experts, l10, l13, select_experts, combined'
     )
     parser.add_argument(
         '--threshold',
@@ -133,7 +136,9 @@ def get_paired_intervention_configs_v4(
         'select_experts_refusal': get_select_experts_refusal_induction_config_v4(threshold=threshold, epsilon=epsilon),
         'select_experts_response': get_select_experts_response_induction_config_v4(threshold=threshold, epsilon=epsilon),
         'combined_refusal_induction': get_combined_refusal_induction_config_v4(epsilon=epsilon),
-        'combined_response_induction': get_combined_response_induction_config_v4(epsilon=epsilon)
+        'combined_response_induction': get_combined_response_induction_config_v4(epsilon=epsilon),
+        'top_experts_refusal': get_top_experts_all_layers_refusal_induction_config_v4(epsilon=epsilon),
+        'top_experts_jailbreak': get_top_experts_all_layers_jailbreak_induction_config_v4(epsilon=epsilon)
     }
 
     return configs
@@ -148,7 +153,7 @@ def filter_configs_by_layers(
 
     Args:
         all_configs: All available configs
-        layers: List of layer identifiers ('all', 'l10', 'l13', 'all_layers', 'select_experts', 'combined')
+        layers: List of layer identifiers ('all', 'l10', 'l13', 'all_layers', 'select_experts', 'combined', 'top_experts')
 
     Returns:
         Filtered dictionary of configs
@@ -161,6 +166,10 @@ def filter_configs_by_layers(
     if 'select_experts' in layers:
         filtered['select_experts_refusal'] = all_configs['select_experts_refusal']
         filtered['select_experts_response'] = all_configs['select_experts_response']
+
+    if 'top_experts' in layers or 'all_layers' in layers:
+        filtered['top_experts_refusal'] = all_configs['top_experts_refusal']
+        filtered['top_experts_jailbreak'] = all_configs['top_experts_jailbreak']
 
     if 'l10' in layers:
         filtered['l10_refusal_induction'] = all_configs['l10_refusal_induction']
