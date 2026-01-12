@@ -182,6 +182,106 @@ def get_expert_weighted_intervention_hooks(
     return fwd_pre_hooks, fwd_hooks
 
 
+def get_multi_expert_weighted_activation_addition_hook(
+    directions: list,  # List of (direction, expert_id) tuples
+    coeff: float = 1.0
+):
+    """
+    Create hook that adds multiple directions, each weighted by its expert's routing weight.
+
+    This allows steering with multiple expert-specific vectors simultaneously.
+
+    Args:
+        directions: List of (direction, expert_id) tuples
+        coeff: Coefficient for steering strength (applies to all directions)
+
+    Returns:
+        Hook function
+    """
+    def hook_fn(module, input, output):
+        """
+        Hook that modifies MLP output based on multiple expert routing weights.
+        """
+        if not isinstance(output, tuple) or len(output) < 2:
+            return output
+
+        mlp_output, router_logits = output[0], output[1]
+
+        # Get routing probabilities (softmax over experts)
+        router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
+
+        batch_size, seq_len = mlp_output.shape[0], mlp_output.shape[1]
+
+        # Accumulate weighted directions
+        total_modification = torch.zeros_like(mlp_output)
+
+        for direction, expert_id in directions:
+            # Extract this expert's weight: [batch*seq, num_experts] -> [batch*seq]
+            expert_weight = router_probs[:, expert_id]
+
+            # Reshape to [batch, seq, 1] to broadcast with [batch, seq, d_model]
+            expert_weight = expert_weight.view(batch_size, seq_len, 1)
+
+            # Compute weighted direction: [batch, seq, 1] * [d_model] -> [batch, seq, d_model]
+            weighted_direction = expert_weight * direction.to(mlp_output.device, mlp_output.dtype)
+
+            # Accumulate
+            total_modification += weighted_direction
+
+        # Add to MLP output
+        modified_output = mlp_output + coeff * total_modification
+
+        return (modified_output, router_logits)
+
+    return hook_fn
+
+
+def get_multi_expert_weighted_intervention_hooks(
+    model_base,
+    expert_directions: list,  # List of (layer_idx, expert_id, direction) tuples
+    coeff: float = 1.0
+) -> Tuple[list, list]:
+    """
+    Get hooks for multi-expert weighted activation addition intervention.
+
+    This function handles multiple expert-specific directions, potentially across
+    different layers. It groups directions by layer and creates appropriate hooks.
+
+    Args:
+        model_base: The model
+        expert_directions: List of (layer_idx, expert_id, direction) tuples
+        coeff: Coefficient (positive to enhance, negative to suppress)
+
+    Returns:
+        (fwd_pre_hooks, fwd_hooks) tuple
+    """
+    # Group directions by layer
+    layer_directions = {}
+    for layer_idx, expert_id, direction in expert_directions:
+        if layer_idx not in layer_directions:
+            layer_directions[layer_idx] = []
+        layer_directions[layer_idx].append((direction, expert_id))
+
+    # Get model layers
+    layers = get_model_layers(model_base)
+
+    # Create hooks for each layer
+    fwd_hooks = []
+    for layer_idx, directions in layer_directions.items():
+        mlp_module = layers[layer_idx].mlp
+
+        # Create the multi-expert weighted intervention hook
+        hook_fn = get_multi_expert_weighted_activation_addition_hook(
+            directions=directions,
+            coeff=coeff
+        )
+
+        fwd_hooks.append((mlp_module, hook_fn))
+
+    fwd_pre_hooks = []
+    return fwd_pre_hooks, fwd_hooks
+
+
 if __name__ == "__main__":
     # Test the weighted intervention mechanism
     print("Expert-specific weighted intervention module")

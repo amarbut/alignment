@@ -154,19 +154,22 @@ def select_expert_direction(
     mu_b,
     tau,
     kl_threshold=1.0,  # Increased from 0.1 for MoE models
-    induce_refusal_threshold=0.0,
+    induce_refusal_threshold=-5.0, # decreased from 0 for MoE models
     prune_layer_percentage=0.2,
-    batch_size=32
+    batch_size=32,
+    top_n=1
 ):
     """
-    Select best expert-specific direction by testing at MLP output level.
+    Select best expert-specific direction(s) by testing at MLP output level.
 
     Args:
         candidate_directions: [n_pos, n_candidates, d_model]
         candidate_mapping: {candidate_idx: (layer, expert)}
+        top_n: Number of top directions to return (default: 1)
 
     Returns:
-        pos, candidate_idx, direction
+        If top_n == 1: (pos, candidate_idx, direction)
+        If top_n > 1: list of (pos, candidate_idx, direction) tuples
     """
 
     if not os.path.exists(artifact_dir):
@@ -397,20 +400,35 @@ def select_expert_direction(
 
     assert len(json_output_filtered_scores) > 0, "All scores have been filtered out!"
 
-    # Select best direction
-    best = json_output_filtered_scores[0]
-    pos = best["position"]
-    candidate_idx = best["candidate_idx"]
-    layer = best["layer"]
-    expert = best["expert"]
+    # Select top-n directions
+    n_to_select = min(top_n, len(json_output_filtered_scores))
 
-    print(f"\n✓ Selected expert direction:")
-    print(f"  Position: {pos}")
-    print(f"  Candidate: {candidate_idx}")
-    print(f"  Layer: {layer}")
-    print(f"  Expert: {expert}")
-    print(f"  Refusal score: {best['refusal_score']:.4f} (baseline: {baseline_refusal_scores_harmful.mean().item():.4f})")
-    print(f"  Steering score: {best['steering_score']:.4f} (baseline: {baseline_refusal_scores_harmless.mean().item():.4f})")
-    print(f"  KL Divergence: {best['kl_div_score']:.4f}")
+    if n_to_select > len(json_output_filtered_scores):
+        print(f"\nWarning: Requested top_n={top_n} but only {len(json_output_filtered_scores)} directions passed filtering")
 
-    return pos, candidate_idx, candidate_directions[pos, candidate_idx]
+    selected_directions = []
+
+    print(f"\n✓ Selected top {n_to_select} expert direction(s):")
+    for i in range(n_to_select):
+        entry = json_output_filtered_scores[i]
+        pos = entry["position"]
+        candidate_idx = entry["candidate_idx"]
+        layer = entry["layer"]
+        expert = entry["expert"]
+
+        print(f"\n  [{i+1}/{n_to_select}]")
+        print(f"    Position: {pos}")
+        print(f"    Candidate: {candidate_idx}")
+        print(f"    Layer: {layer}")
+        print(f"    Expert: {expert}")
+        print(f"    Refusal score: {entry['refusal_score']:.4f} (baseline: {baseline_refusal_scores_harmful.mean().item():.4f})")
+        print(f"    Steering score: {entry['steering_score']:.4f} (baseline: {baseline_refusal_scores_harmless.mean().item():.4f})")
+        print(f"    KL Divergence: {entry['kl_div_score']:.4f}")
+
+        selected_directions.append((pos, candidate_idx, candidate_directions[pos, candidate_idx]))
+
+    # Return single tuple for backward compatibility when top_n=1
+    if top_n == 1:
+        return selected_directions[0]
+    else:
+        return selected_directions

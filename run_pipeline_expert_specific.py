@@ -250,6 +250,13 @@ def parse_arguments():
         help='Maximum new tokens for generation'
     )
 
+    parser.add_argument(
+        '--top_n',
+        type=int,
+        default=1,
+        help='Number of top vectors to select and use for steering (default: 1)'
+    )
+
     return parser.parse_args()
 
 
@@ -431,18 +438,24 @@ def select_best_expert_direction(
     harmful_val,
     harmless_val,
     expert_directions,
-    artifact_dir
+    artifact_dir,
+    top_n=1
 ):
     """
-    Select the best expert-specific direction using Arditi's criteria.
+    Select the best expert-specific direction(s) using Arditi's criteria.
 
     Returns:
-        pos, layer, expert_id, direction
+        If top_n == 1: (pos, layer, expert_id, direction, mu_b)
+        If top_n > 1: (selected_directions_list, mu_b) where selected_directions_list
+                      contains list of (pos, layer, expert_id, direction) tuples
     """
     os.makedirs(artifact_dir, exist_ok=True)
 
     print("\n" + "="*80)
-    print("SELECTING BEST EXPERT DIRECTION")
+    if top_n == 1:
+        print("SELECTING BEST EXPERT DIRECTION")
+    else:
+        print(f"SELECTING TOP {top_n} EXPERT DIRECTIONS")
     print("="*80)
 
     # Convert to format compatible with select_direction
@@ -454,7 +467,7 @@ def select_best_expert_direction(
     # Use expert-specific MLP-level selection
     mu_b = torch.zeros(candidates.size(-1), device=candidates.device)
 
-    pos, candidate_idx, direction = select_expert_direction(
+    result = select_expert_direction(
         model_base,
         harmful_val,
         harmless_val,
@@ -463,27 +476,37 @@ def select_best_expert_direction(
         artifact_dir=artifact_dir,
         coeff=args.coeff,  # Use command-line argument
         mu_b=mu_b,
-        tau=1.0
+        tau=1.0,
+        top_n=top_n
     )
 
-    # Map candidate_idx back to (layer, expert)
-    layer, expert_id = candidate_mapping[candidate_idx]
+    # Handle single vs multiple directions
+    if top_n == 1:
+        pos, candidate_idx, direction = result
+        # Map candidate_idx back to (layer, expert)
+        layer, expert_id = candidate_mapping[candidate_idx]
 
-    print(f"\n✓ Best direction:")
-    print(f"  Position: {pos}")
-    print(f"  Layer: {layer}")
-    print(f"  Expert: {expert_id}")
-    print(f"  Direction norm: {direction.norm().item():.4f}")
+        print(f"\n✓ Best direction:")
+        print(f"  Position: {pos}")
+        print(f"  Layer: {layer}")
+        print(f"  Expert: {expert_id}")
+        print(f"  Direction norm: {direction.norm().item():.4f}")
 
-    return pos, layer, expert_id, direction, mu_b
+        return pos, layer, expert_id, direction, mu_b
+    else:
+        # result is a list of (pos, candidate_idx, direction) tuples
+        selected_directions = []
+        for pos, candidate_idx, direction in result:
+            layer, expert_id = candidate_mapping[candidate_idx]
+            selected_directions.append((pos, layer, expert_id, direction))
+
+        return selected_directions, mu_b
 
 
 def generate_and_evaluate_completions(
     model_base,
     dataset_name,
-    layer,
-    expert_id,
-    direction,
+    expert_info,  # Can be (layer, expert_id, direction) or list of (layer, expert_id, direction)
     coeff,
     output_dir,
     intervention_label,
@@ -491,7 +514,12 @@ def generate_and_evaluate_completions(
     max_new_tokens=256,
     dataset=None
 ):
-    """Generate completions with expert-specific intervention and evaluate."""
+    """Generate completions with expert-specific intervention and evaluate.
+
+    Args:
+        expert_info: Either a single (layer, expert_id, direction) tuple for single-vector steering,
+                     or a list of such tuples for multi-vector steering
+    """
 
     # Create output directory
     completions_dir = os.path.join(output_dir, 'completions', intervention_label)
@@ -501,14 +529,25 @@ def generate_and_evaluate_completions(
     if dataset is None:
         dataset = load_dataset(dataset_name)
 
-    # Get intervention hooks
-    fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
-        model_base,
-        layer_idx=layer,
-        expert_id=expert_id,
-        direction=direction,
-        coeff=coeff
-    )
+    # Get intervention hooks - handle both single and multiple directions
+    if isinstance(expert_info, list):
+        # Multiple directions
+        from expert_intervention import get_multi_expert_weighted_intervention_hooks
+        fwd_pre_hooks, fwd_hooks = get_multi_expert_weighted_intervention_hooks(
+            model_base,
+            expert_directions=expert_info,  # List of (layer, expert_id, direction)
+            coeff=coeff
+        )
+    else:
+        # Single direction (backward compatibility)
+        layer, expert_id, direction = expert_info
+        fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
+            model_base,
+            layer_idx=layer,
+            expert_id=expert_id,
+            direction=direction,
+            coeff=coeff
+        )
 
     # Generate completions
     print(f"\nGenerating completions for {dataset_name} with {intervention_label}...")
@@ -567,6 +606,10 @@ def run_expert_specific_pipeline(args):
         model_alias = f"expert_specific_t{args.threshold}_{adapter_name}"
     else:
         model_alias = f"expert_specific_t{args.threshold}"
+
+    # Add top_n to alias if not default
+    if args.top_n > 1:
+        model_alias += f"_top{args.top_n}"
 
     cfg = Config(model_alias=model_alias, model_path=args.model_path)
 
@@ -637,40 +680,91 @@ def run_expert_specific_pipeline(args):
         directions_path = os.path.join(output_dir, "expert_directions", "all_expert_directions.pt")
         expert_directions = torch.load(directions_path)
 
-    # Select best direction
+    # Select best direction(s)
     if not args.skip_select:
-        pos, layer, expert_id, direction, mu_b = select_best_expert_direction(
+        selection_result = select_best_expert_direction(
             model_base,
             harmful_val,
             harmless_val,
             expert_directions,
-            artifact_dir=os.path.join(output_dir, "selection")
+            artifact_dir=os.path.join(output_dir, "selection"),
+            top_n=args.top_n
         )
 
-        # Save selected direction
-        metadata = {
-            "pos": int(pos),
-            "layer": int(layer),
-            "expert_id": int(expert_id),
-            "threshold": args.threshold,
-            "expert_type": args.expert_type
-        }
+        # Handle single vs multiple directions
+        if args.top_n == 1:
+            pos, layer, expert_id, direction, mu_b = selection_result
 
-        with open(os.path.join(output_dir, "direction_metadata.json"), 'w') as f:
-            json.dump(metadata, f, indent=2)
+            # Save selected direction (single)
+            metadata = {
+                "top_n": 1,
+                "pos": int(pos),
+                "layer": int(layer),
+                "expert_id": int(expert_id),
+                "threshold": args.threshold,
+                "expert_type": args.expert_type
+            }
 
-        torch.save(direction, os.path.join(output_dir, "direction.pt"))
-        torch.save(mu_b, os.path.join(output_dir, "mu_b.pt"))
+            with open(os.path.join(output_dir, "direction_metadata.json"), 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            torch.save(direction, os.path.join(output_dir, "direction.pt"))
+            torch.save(mu_b, os.path.join(output_dir, "mu_b.pt"))
+
+        else:
+            selected_directions, mu_b = selection_result
+
+            # Save selected directions (multiple)
+            metadata = {
+                "top_n": args.top_n,
+                "threshold": args.threshold,
+                "expert_type": args.expert_type,
+                "directions": [
+                    {
+                        "pos": int(pos),
+                        "layer": int(layer),
+                        "expert_id": int(expert_id)
+                    }
+                    for pos, layer, expert_id, _ in selected_directions
+                ]
+            }
+
+            with open(os.path.join(output_dir, "direction_metadata.json"), 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            # Save all directions
+            directions_dict = {
+                f"direction_{i}": direction
+                for i, (_, _, _, direction) in enumerate(selected_directions)
+            }
+            torch.save(directions_dict, os.path.join(output_dir, "directions.pt"))
+            torch.save(mu_b, os.path.join(output_dir, "mu_b.pt"))
 
     else:
         print("\nSkipping selection, loading from cache...")
         with open(os.path.join(output_dir, "direction_metadata.json"), 'r') as f:
             metadata = json.load(f)
-        pos = metadata["pos"]
-        layer = metadata["layer"]
-        expert_id = metadata["expert_id"]
-        direction = torch.load(os.path.join(output_dir, "direction.pt"))
-        mu_b = torch.load(os.path.join(output_dir, "mu_b.pt"))
+
+        # Load based on top_n in metadata
+        if metadata.get("top_n", 1) == 1:
+            # Single direction
+            pos = metadata["pos"]
+            layer = metadata["layer"]
+            expert_id = metadata["expert_id"]
+            direction = torch.load(os.path.join(output_dir, "direction.pt"))
+            mu_b = torch.load(os.path.join(output_dir, "mu_b.pt"))
+        else:
+            # Multiple directions
+            directions_dict = torch.load(os.path.join(output_dir, "directions.pt"))
+            mu_b = torch.load(os.path.join(output_dir, "mu_b.pt"))
+
+            selected_directions = []
+            for i, dir_meta in enumerate(metadata["directions"]):
+                pos = dir_meta["pos"]
+                layer = dir_meta["layer"]
+                expert_id = dir_meta["expert_id"]
+                direction = directions_dict[f"direction_{i}"]
+                selected_directions.append((pos, layer, expert_id, direction))
 
     # Evaluation
     if not args.skip_eval:
@@ -678,24 +772,29 @@ def run_expert_specific_pipeline(args):
         print("EVALUATION")
         print("="*80)
 
-        # Move direction to model device and dtype
-        direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
+        # Prepare expert_info for evaluation - handle single vs multiple
+        if args.top_n == 1:
+            # Move direction to model device and dtype
+            direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
+            expert_info = (layer, expert_id, direction)
+        else:
+            # Move all directions to model device and dtype
+            expert_info = [
+                (layer, expert_id, direction.to(model_base.model.device, dtype=model_base.model.dtype))
+                for _, layer, expert_id, direction in selected_directions
+            ]
 
         # Baseline (no intervention)
         print("\n" + "-"*80)
         print("BASELINE (No Intervention)")
         print("-"*80)
 
-        baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
-
         # Harmful test set
         for dataset_name in cfg.evaluation_datasets:
             generate_and_evaluate_completions(
                 model_base,
                 dataset_name,
-                layer,
-                expert_id,
-                direction,
+                expert_info,
                 coeff=0.0,  # No intervention
                 output_dir=output_dir,
                 intervention_label='baseline',
@@ -707,9 +806,7 @@ def run_expert_specific_pipeline(args):
         generate_and_evaluate_completions(
             model_base,
             'harmless',
-            layer,
-            expert_id,
-            direction,
+            expert_info,
             coeff=0.0,
             output_dir=output_dir,
             intervention_label='baseline',
@@ -728,9 +825,7 @@ def run_expert_specific_pipeline(args):
             generate_and_evaluate_completions(
                 model_base,
                 dataset_name,
-                layer,
-                expert_id,
-                direction,
+                expert_info,
                 coeff=-args.coeff,  # Negative to suppress refusal
                 output_dir=output_dir,
                 intervention_label='actadd',
@@ -742,9 +837,7 @@ def run_expert_specific_pipeline(args):
         generate_and_evaluate_completions(
             model_base,
             'harmless',
-            layer,
-            expert_id,
-            direction,
+            expert_info,
             coeff=args.coeff,  # Positive to induce refusal
             output_dir=output_dir,
             intervention_label='actadd',
@@ -757,10 +850,16 @@ def run_expert_specific_pipeline(args):
     print("PIPELINE COMPLETE")
     print("="*80)
     print(f"Results saved to: {output_dir}")
-    print(f"\nSelected expert-specific direction:")
-    print(f"  Layer: {layer}")
-    print(f"  Expert: {expert_id}")
-    print(f"  Position: {pos}")
+
+    if args.top_n == 1:
+        print(f"\nSelected expert-specific direction:")
+        print(f"  Layer: {layer}")
+        print(f"  Expert: {expert_id}")
+        print(f"  Position: {pos}")
+    else:
+        print(f"\nSelected top {args.top_n} expert-specific directions:")
+        for i, (pos, layer, expert_id, _) in enumerate(selected_directions):
+            print(f"  [{i+1}] Layer: {layer}, Expert: {expert_id}, Position: {pos}")
 
 
 if __name__ == "__main__":
