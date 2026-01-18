@@ -263,7 +263,7 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
-            mlp_module = model_card.get_mlp_module(layer_idx)
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Use negative actAdd (reduce refusal)
             negative_add_hook = get_expert_weighted_activation_addition_hook(
@@ -289,7 +289,7 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             refusal_vector = candidate_directions[source_pos, candidate_idx]
-            mlp_module = model_card.get_mlp_module(layer_idx)
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Add direction to MLP output, weighted by expert's routing probability
             addition_hook = get_expert_weighted_activation_addition_hook(
