@@ -444,6 +444,7 @@ def select_best_expert_direction(
     harmless_val,
     expert_directions,
     artifact_dir,
+    model_card,
     top_n=1
 ):
     """
@@ -482,7 +483,8 @@ def select_best_expert_direction(
         coeff=args.coeff,  # Use command-line argument
         mu_b=mu_b,
         tau=1.0,
-        top_n=top_n
+        top_n=top_n,
+        model_card=model_card
     )
 
     # Handle single vs multiple directions
@@ -725,7 +727,8 @@ def run_expert_specific_pipeline(args):
             harmless_val,
             expert_directions,
             artifact_dir=os.path.join(output_dir, "selection"),
-            top_n=args.top_n
+            top_n=args.top_n,
+            model_card=model_card
         )
 
         # Handle single vs multiple directions
