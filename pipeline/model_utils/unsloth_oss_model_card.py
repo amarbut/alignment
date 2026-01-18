@@ -55,13 +55,17 @@ class UnslothOSSModelCard(ModelCard):
         """Get router module at specified layer."""
         return self.layers[layer_idx].mlp.router
 
-    def get_router_bias(self, router: nn.Module) -> torch.Tensor:
+    def get_router_bias(self, router: nn.Module, layer_idx: int = None) -> torch.Tensor:
         """
         Get router bias parameter.
 
         Unsloth wraps the router in a linear layer, so bias may be at:
         - router.linear.bias (most common for unsloth)
         - router.bias (fallback)
+
+        Args:
+            router: Router module
+            layer_idx: Layer index (not used for unsloth OSS, but kept for API consistency)
         """
         # Try unsloth-wrapped path first
         if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
@@ -94,11 +98,16 @@ class UnslothOSSModelCard(ModelCard):
             router.bias = nn.Parameter(bias)
             return router.bias
 
-    def set_router_bias(self, router: nn.Module, bias: torch.Tensor):
+    def set_router_bias(self, router: nn.Module, bias: torch.Tensor, layer_idx: int = None):
         """
         Set router bias parameter.
 
         Handles both unsloth-wrapped (router.linear.bias) and standard paths.
+
+        Args:
+            router: Router module
+            bias: New bias values
+            layer_idx: Layer index (not used for unsloth OSS, but kept for API consistency)
         """
         if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
             if router.linear.bias is not None:
@@ -119,5 +128,5 @@ class UnslothOSSModelCard(ModelCard):
         return "top-2"
 
     def get_expert_diffs_filename(self) -> str:
-        """Return filename for unsloth OSS expert diffs."""
-        return "unsloth_oss_expert_diffs.json"
+        """Return filename for OSS expert diffs (same as standard OSS, same model)."""
+        return "oss_expert_diffs.json"

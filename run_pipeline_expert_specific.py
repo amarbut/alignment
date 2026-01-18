@@ -635,6 +635,11 @@ def run_expert_specific_pipeline(args):
     print("="*80)
     model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path)
 
+    # Create model card for MoE-specific operations
+    from pipeline.model_utils.model_card_factory import create_model_card
+    model_card = create_model_card(model_base)
+    print(f"Model card: {type(model_card).__name__}")
+
     # Load datasets
     print("\n" + "="*80)
     print("LOADING DATASETS")
@@ -663,9 +668,27 @@ def run_expert_specific_pipeline(args):
     print("\n" + "="*80)
     print("SELECTING CANDIDATE EXPERTS")
     print("="*80)
+
+    # Get model-specific expert diffs path
+    expert_diffs_filename = model_card.get_expert_diffs_filename()
+    expert_diffs_path = f"expert_explore/{expert_diffs_filename}"
+
+    # Generate expert diffs if they don't exist
+    if not os.path.exists(expert_diffs_path):
+        print(f"Expert diffs not found at {expert_diffs_path}, generating...")
+        os.makedirs("expert_explore", exist_ok=True)
+        model_card.generate_expert_diffs(
+            harmful_dataset_path="dataset/splits/harmful_train.json",
+            harmless_dataset_path="dataset/splits/harmless_train.json",
+            output_path=expert_diffs_path,
+            batch_size=args.batch_size
+        )
+        print(f"Expert diffs saved to {expert_diffs_path}")
+
     candidate_experts = get_candidate_experts(
         threshold=args.threshold,
-        expert_type=args.expert_type
+        expert_type=args.expert_type,
+        expert_diffs_path=expert_diffs_path
     )
 
     # Save candidate expert info

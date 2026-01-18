@@ -37,12 +37,16 @@ class OSSModelCard(ModelCard):
         """Get router module at specified layer."""
         return self.layers[layer_idx].mlp.router
 
-    def get_router_bias(self, router: nn.Module) -> torch.Tensor:
+    def get_router_bias(self, router: nn.Module, layer_idx: int = None) -> torch.Tensor:
         """
         Get router bias parameter.
 
         For standard OSS, the bias is directly on the router.
         Creates bias if it doesn't exist.
+
+        Args:
+            router: Router module
+            layer_idx: Layer index (not used for OSS, but kept for API consistency)
         """
         if hasattr(router, 'bias') and router.bias is not None:
             return router.bias
@@ -54,8 +58,15 @@ class OSSModelCard(ModelCard):
             router.bias = nn.Parameter(bias)
             return router.bias
 
-    def set_router_bias(self, router: nn.Module, bias: torch.Tensor):
-        """Set router bias parameter."""
+    def set_router_bias(self, router: nn.Module, bias: torch.Tensor, layer_idx: int = None):
+        """
+        Set router bias parameter.
+
+        Args:
+            router: Router module
+            bias: New bias values
+            layer_idx: Layer index (not used for OSS, but kept for API consistency)
+        """
         if not hasattr(router, 'bias') or router.bias is None:
             router.bias = nn.Parameter(bias)
         else:

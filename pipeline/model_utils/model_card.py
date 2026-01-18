@@ -106,13 +106,13 @@ class ModelCard(ABC):
         pass
 
     @abstractmethod
-    def get_router_bias(self, router: nn.Module) -> torch.Tensor:
-        """Get router bias (may create if doesn't exist)."""
+    def get_router_bias(self, router: nn.Module, layer_idx: Optional[int] = None) -> torch.Tensor:
+        """Get router bias (may create if doesn't exist). layer_idx needed for hook-based bias (Mixtral)."""
         pass
 
     @abstractmethod
-    def set_router_bias(self, router: nn.Module, bias: torch.Tensor):
-        """Set router bias."""
+    def set_router_bias(self, router: nn.Module, bias: torch.Tensor, layer_idx: Optional[int] = None):
+        """Set router bias. layer_idx needed for hook-based bias (Mixtral)."""
         pass
 
     @abstractmethod

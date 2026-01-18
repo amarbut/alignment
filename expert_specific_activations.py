@@ -80,8 +80,8 @@ def force_expert_via_bias(
     # Get router via model card
     router = model_card.get_router(layer_idx)
 
-    # Get original bias via model card
-    original_bias = model_card.get_router_bias(router).clone()
+    # Get original bias via model card (pass layer_idx for Mixtral hook-based bias)
+    original_bias = model_card.get_router_bias(router, layer_idx=layer_idx).clone()
 
     # Create modified bias: set all to very negative, then boost target expert
     num_experts = model_card.get_num_experts(layer_idx)
@@ -90,8 +90,8 @@ def force_expert_via_bias(
                               dtype=original_bias.dtype)
     modified_bias[expert_id] = force_strength
 
-    # Apply modification via model card
-    model_card.set_router_bias(router, modified_bias)
+    # Apply modification via model card (pass layer_idx for Mixtral hook-based bias)
+    model_card.set_router_bias(router, modified_bias, layer_idx=layer_idx)
 
     return original_bias, model_card
 
@@ -108,9 +108,9 @@ def restore_router_bias(
         from pipeline.model_utils.model_card_factory import create_model_card
         model_card = create_model_card(model_base)
 
-    # Get router and restore via model card
+    # Get router and restore via model card (pass layer_idx for Mixtral hook-based bias)
     router = model_card.get_router(layer_idx)
-    model_card.set_router_bias(router, original_bias)
+    model_card.set_router_bias(router, original_bias, layer_idx=layer_idx)
 
 
 def get_expert_activations(

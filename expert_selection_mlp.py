@@ -17,12 +17,15 @@ import math
 import matplotlib.pyplot as plt
 import os
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from jaxtyping import Float
 from torch import Tensor
 from tqdm import tqdm
 
 from pipeline.model_utils.model_base import ModelBase
+
+if TYPE_CHECKING:
+    from pipeline.model_utils.model_card import ModelCard
 from pipeline.utils.hook_utils import add_hooks
 from pipeline.submodules.select_direction import (
     refusal_score,
@@ -157,7 +160,8 @@ def select_expert_direction(
     induce_refusal_threshold=-5.0, # decreased from 0 for MoE models
     prune_layer_percentage=0.2,
     batch_size=32,
-    top_n=1
+    top_n=1,
+    model_card: Optional["ModelCard"] = None
 ):
     """
     Select best expert-specific direction(s) by testing at MLP output level.

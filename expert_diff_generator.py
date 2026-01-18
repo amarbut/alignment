@@ -101,7 +101,8 @@ def extract_expert_routing(
             batch_prompts = prompts[i:i + batch_size]
 
             # Tokenize using model_base's tokenize function
-            tokenized = tokenize_fn(batch_prompts)
+            # Use keyword argument to avoid conflict with partial's bound tokenizer
+            tokenized = tokenize_fn(instructions=batch_prompts)
 
             input_ids = tokenized.input_ids.to(model.device)
             attention_mask = tokenized.attention_mask.to(model.device)

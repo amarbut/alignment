@@ -99,12 +99,16 @@ class DeepSeekModelCard(ModelCard):
                 f"Available attributes: {[a for a in dir(mlp) if not a.startswith('_')]}"
             )
 
-    def get_router_bias(self, router: nn.Module) -> torch.Tensor:
+    def get_router_bias(self, router: nn.Module, layer_idx: int = None) -> torch.Tensor:
         """
         Get router bias parameter.
 
         DeepSeek may not have bias by default (like Mixtral).
         Creates one if needed for expert forcing.
+
+        Args:
+            router: Router module
+            layer_idx: Layer index (not used currently, but kept for API consistency)
         """
         if hasattr(router, 'bias') and router.bias is not None:
             return router.bias
@@ -116,8 +120,15 @@ class DeepSeekModelCard(ModelCard):
             router.bias = nn.Parameter(bias)
             return router.bias
 
-    def set_router_bias(self, router: nn.Module, bias: torch.Tensor):
-        """Set router bias parameter."""
+    def set_router_bias(self, router: nn.Module, bias: torch.Tensor, layer_idx: int = None):
+        """
+        Set router bias parameter.
+
+        Args:
+            router: Router module
+            bias: New bias values
+            layer_idx: Layer index (not used currently, but kept for API consistency)
+        """
         if not hasattr(router, 'bias') or router.bias is None:
             router.bias = nn.Parameter(bias)
         else:
