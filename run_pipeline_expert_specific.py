@@ -728,7 +728,7 @@ def run_expert_specific_pipeline(args):
             expert_directions,
             artifact_dir=os.path.join(output_dir, "selection"),
             top_n=args.top_n,
-            
+            model_card=model_card
         )
 
         # Handle single vs multiple directions
