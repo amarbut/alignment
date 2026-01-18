@@ -32,5 +32,8 @@ def construct_model_base(model_path: str) -> ModelBase:
     elif 'mixtral' in model_path.lower():
         from pipeline.model_utils.mixtral_model import MixtralModel
         return MixtralModel(model_path)
+    elif 'deepseek' in model_path.lower():
+        from pipeline.model_utils.deepseek_model import DeepSeekModel
+        return DeepSeekModel(model_path)
     else:
         raise ValueError(f"Unknown model family: {model_path}")
