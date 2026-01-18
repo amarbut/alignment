@@ -32,7 +32,6 @@ from expert_selection_mlp import select_expert_direction
 
 # Import for LoRA adapter support
 try:
-    import fix_hf_cache
     from unsloth import FastLanguageModel
     from peft import PeftModel
     UNSLOTH_AVAILABLE = True

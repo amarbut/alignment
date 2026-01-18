@@ -15,6 +15,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List
 
 from pipeline.model_utils.model_base import ModelBase
+from pipeline.model_utils.hf_cache_config import set_hf_cache
 
 
 # DeepSeek refusal tokens (common refusal starters)
@@ -82,6 +83,9 @@ class DeepSeekModel(ModelBase):
     """ModelBase implementation for DeepSeek-MoE-16B-Chat."""
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
+        # Set HF cache location for DeepSeek models
+        set_hf_cache('deepseek')
+
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=dtype,

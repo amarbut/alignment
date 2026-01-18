@@ -18,6 +18,7 @@ from pipeline.model_utils.oss_model import (
     OSS_REFUSAL_TOKS,
     OSS_CHAT_TEMPLATE
 )
+from pipeline.model_utils.hf_cache_config import set_hf_cache
 
 try:
     from unsloth import FastLanguageModel
@@ -45,6 +46,9 @@ class UnslothOSSModel(OSSModel):
             dtype: Data type (None for auto-detect)
             max_seq_length: Maximum sequence length
         """
+        # Set HF cache location for unsloth models
+        set_hf_cache('unsloth')
+
         print(f"Loading unsloth model from {model_path}...")
 
         model, tokenizer = FastLanguageModel.from_pretrained(
