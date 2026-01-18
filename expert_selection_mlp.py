@@ -229,15 +229,15 @@ def select_expert_direction(
             direction_vec = candidate_directions[source_pos, candidate_idx]
 
             # Get MLP module for this layer
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Use negative actAdd (induce refusal) instead of ablation
             # This should increase refusal on harmless without breaking the model
             negative_add_hook = get_expert_weighted_activation_addition_hook(
                 direction=direction_vec,
                 expert_id=expert,
-                coeff=-coeff  # Negative to induce refusal
+                coeff=-coeff,  # Negative to induce refusal
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, negative_add_hook)]
 
@@ -263,14 +263,14 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer_idx)
 
             # Use negative actAdd (reduce refusal)
             negative_add_hook = get_expert_weighted_activation_addition_hook(
                 direction=direction_vec,
                 expert_id=expert,
-                coeff=-coeff  # Negative to reduce refusal
+                coeff=-coeff,  # Negative to reduce refusal
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, negative_add_hook)]
 
@@ -289,14 +289,14 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             refusal_vector = candidate_directions[source_pos, candidate_idx]
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer_idx)
 
             # Add direction to MLP output, weighted by expert's routing probability
             addition_hook = get_expert_weighted_activation_addition_hook(
                 direction=refusal_vector,
                 expert_id=expert,
-                coeff=coeff
+                coeff=coeff,
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, addition_hook)]
 
