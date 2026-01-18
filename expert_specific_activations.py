@@ -4,11 +4,12 @@ Extract expert-specific activations by forcing individual experts.
 This module implements activation extraction where each expert is forced
 via router bias modification, allowing us to compute mean differences
 per expert rather than per layer.
+
+Refactored to use ModelCard abstraction for model-agnostic MoE access.
 """
 
 import torch
-import os
-from typing import List, Tuple
+from typing import List, Tuple, Optional, TYPE_CHECKING
 from jaxtyping import Float
 from torch import Tensor
 from tqdm import tqdm
@@ -16,58 +17,25 @@ from tqdm import tqdm
 from pipeline.utils.hook_utils import add_hooks
 from pipeline.model_utils.model_base import ModelBase
 
-
-def get_model_layers(model_base):
-    """
-    Navigate model structure to get layers, handling PEFT wrapping.
-
-    Supports:
-    - Standard: model.model.layers
-    - PEFT: model.base_model.model.layers or model.model.model.layers
-    """
-    # Try direct access first
-    if hasattr(model_base, 'model'):
-        current = model_base.model
-
-        # Navigate through PEFT/wrapper layers
-        while hasattr(current, 'model') or hasattr(current, 'base_model'):
-            if hasattr(current, 'base_model'):
-                current = current.base_model
-            elif hasattr(current, 'model'):
-                current = current.model
-            else:
-                break
-
-            # Check if we've reached the layer container
-            if hasattr(current, 'layers'):
-                return current.layers
-
-        # Final check at current level
-        if hasattr(current, 'layers'):
-            return current.layers
-
-    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+if TYPE_CHECKING:
+    from pipeline.model_utils.model_card import ModelCard
 
 
 def get_mlp_output_hook(
     layer: int,
     cache: Float[Tensor, "layer pos n d_model"],
     batch_slice: slice,
-    positions: List[int]
+    positions: List[int],
+    model_card: "ModelCard"
 ):
     """
     Hook to capture MLP OUTPUT activations (after expert processing).
 
-    This is different from Arditi's approach which captures block inputs.
-    Here we want the MLP output to get expert-specific activations.
+    Uses model_card to parse MLP output correctly for any model architecture.
     """
     def hook_fn(module, input, output):
-        # MLP output is tuple: (hidden_states, router_logits)
-        # We want hidden_states (expert outputs)
-        if isinstance(output, tuple):
-            mlp_output = output[0]  # Shape: (B, S, d)
-        else:
-            mlp_output = output
+        # Use model card to parse output (handles tuple vs tensor)
+        mlp_output, _ = model_card.parse_mlp_output(output)
 
         # Select requested positions -> shape (B, P, d)
         x_pos = mlp_output[:, positions, :].to(cache.dtype)
@@ -84,8 +52,9 @@ def force_expert_via_bias(
     model_base: ModelBase,
     layer_idx: int,
     expert_id: int,
-    force_strength: float = 100.0
-) -> Tensor:
+    force_strength: float = 100.0,
+    model_card: Optional["ModelCard"] = None
+) -> Tuple[Tensor, "ModelCard"]:
     """
     Force a specific expert by adding large bias to its router logits.
 
@@ -94,53 +63,54 @@ def force_expert_via_bias(
         layer_idx: Which layer to modify
         expert_id: Which expert to force
         force_strength: How much to boost the expert's bias (default: 100.0)
+        model_card: Optional ModelCard (created if not provided)
 
     Returns:
-        Original bias tensor (for restoration)
+        Tuple of (original_bias, model_card) for restoration
     """
-    # Navigate to the router (handling PEFT wrapping)
-    layers = get_model_layers(model_base)
-    router = layers[layer_idx].mlp.router
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
 
-    # For unsloth models, bias is in router.linear.bias
-    # For standard models, it's router.bias
-    if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
-        bias_param = router.linear.bias
-    elif hasattr(router, 'bias'):
-        bias_param = router.bias
-    else:
-        raise AttributeError(f"Could not find bias in router: {type(router)}")
+    # Check this is an MoE layer
+    if not model_card.is_moe_layer(layer_idx):
+        raise ValueError(f"Layer {layer_idx} is not an MoE layer")
 
-    # Save original bias
-    original_bias = bias_param.data.clone()
+    # Get router via model card
+    router = model_card.get_router(layer_idx)
+
+    # Get original bias via model card
+    original_bias = model_card.get_router_bias(router).clone()
 
     # Create modified bias: set all to very negative, then boost target expert
-    modified_bias = torch.full_like(original_bias, -force_strength)
+    num_experts = model_card.get_num_experts(layer_idx)
+    modified_bias = torch.full((num_experts,), -force_strength,
+                              device=original_bias.device,
+                              dtype=original_bias.dtype)
     modified_bias[expert_id] = force_strength
 
-    # Apply modification
-    bias_param.data = modified_bias
+    # Apply modification via model card
+    model_card.set_router_bias(router, modified_bias)
 
-    return original_bias
+    return original_bias, model_card
 
 
 def restore_router_bias(
     model_base: ModelBase,
     layer_idx: int,
-    original_bias: Tensor
+    original_bias: Tensor,
+    model_card: Optional["ModelCard"] = None
 ):
     """Restore original router bias."""
-    layers = get_model_layers(model_base)
-    router = layers[layer_idx].mlp.router
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
 
-    # For unsloth models, bias is in router.linear.bias
-    # For standard models, it's router.bias
-    if hasattr(router, 'linear') and hasattr(router.linear, 'bias'):
-        router.linear.bias.data = original_bias
-    elif hasattr(router, 'bias'):
-        router.bias.data = original_bias
-    else:
-        raise AttributeError(f"Could not find bias in router: {type(router)}")
+    # Get router and restore via model card
+    router = model_card.get_router(layer_idx)
+    model_card.set_router_bias(router, original_bias)
 
 
 def get_expert_activations(
@@ -150,7 +120,8 @@ def get_expert_activations(
     expert_id: int,
     *,
     batch_size: int = 32,
-    dtype: torch.dtype = torch.float32
+    dtype: torch.dtype = torch.float32,
+    model_card: Optional["ModelCard"] = None
 ) -> Float[Tensor, "pos n d_model"]:
     """
     Extract MLP output activations when a specific expert is forced.
@@ -162,12 +133,17 @@ def get_expert_activations(
         expert_id: Which expert to force
         batch_size: Batch size for processing
         dtype: Data type for cache
+        model_card: Optional ModelCard (created if not provided)
 
     Returns:
         Activations with shape [n_positions, n_instructions, d_model]
     """
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
     model = model_base.model
-    tokenizer = model_base.tokenizer
     tokenize_instructions_fn = model_base.tokenize_instructions_fn
 
     positions = list(range(-5, 0))  # Last 5 token positions
@@ -184,7 +160,9 @@ def get_expert_activations(
 
     # Force the expert
     print(f"  Forcing Layer {layer_idx}, Expert {expert_id}...")
-    original_bias = force_expert_via_bias(model_base, layer_idx, expert_id)
+    original_bias, model_card = force_expert_via_bias(
+        model_base, layer_idx, expert_id, model_card=model_card
+    )
 
     try:
         for start in tqdm(range(0, n_instructions, batch_size),
@@ -195,16 +173,16 @@ def get_expert_activations(
 
             inputs = tokenize_instructions_fn(instructions=instructions[start:end])
 
-            # Hook only the specific MLP layer
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer_idx].mlp
+            # Hook the MLP module via model card
+            mlp_module = model_card.get_mlp_module(layer_idx)
             fwd_hooks = [(
                 mlp_module,
                 get_mlp_output_hook(
                     layer=0,  # We only have one layer in cache
                     cache=cache,
                     batch_slice=batch_slice,
-                    positions=positions
+                    positions=positions,
+                    model_card=model_card
                 )
             )]
 
@@ -217,7 +195,7 @@ def get_expert_activations(
 
     finally:
         # Always restore original bias
-        restore_router_bias(model_base, layer_idx, original_bias)
+        restore_router_bias(model_base, layer_idx, original_bias, model_card=model_card)
         print(f"  Restored router bias for Layer {layer_idx}")
 
     # Return shape: [n_positions, n_instructions, d_model]
@@ -230,7 +208,8 @@ def get_mean_expert_activations(
     layer_idx: int,
     expert_id: int,
     *,
-    batch_size: int = 32
+    batch_size: int = 32,
+    model_card: Optional["ModelCard"] = None
 ) -> Float[Tensor, "pos d_model"]:
     """
     Get mean activations for a specific expert.
@@ -244,7 +223,8 @@ def get_mean_expert_activations(
         layer_idx,
         expert_id,
         batch_size=batch_size,
-        dtype=torch.float64  # High precision for mean computation
+        dtype=torch.float64,  # High precision for mean computation
+        model_card=model_card
     )
 
     # Average over instructions dimension
@@ -260,7 +240,8 @@ def get_expert_mean_diff(
     layer_idx: int,
     expert_id: int,
     *,
-    batch_size: int = 32
+    batch_size: int = 32,
+    model_card: Optional["ModelCard"] = None
 ) -> Float[Tensor, "pos d_model"]:
     """
     Compute mean difference for a specific expert.
@@ -268,16 +249,23 @@ def get_expert_mean_diff(
     Returns:
         Mean difference with shape [n_positions, d_model]
     """
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
     print(f"\nComputing mean activations for Layer {layer_idx}, Expert {expert_id}...")
 
     print("  Processing harmful instructions...")
     mean_harmful = get_mean_expert_activations(
-        model_base, harmful_instructions, layer_idx, expert_id, batch_size=batch_size
+        model_base, harmful_instructions, layer_idx, expert_id,
+        batch_size=batch_size, model_card=model_card
     )
 
     print("  Processing harmless instructions...")
     mean_harmless = get_mean_expert_activations(
-        model_base, harmless_instructions, layer_idx, expert_id, batch_size=batch_size
+        model_base, harmless_instructions, layer_idx, expert_id,
+        batch_size=batch_size, model_card=model_card
     )
 
     mean_diff = mean_harmful - mean_harmless
@@ -286,6 +274,20 @@ def get_expert_mean_diff(
     print(f"  Mean diff magnitude: {mean_diff.norm(dim=-1).mean().item():.4f}")
 
     return mean_diff
+
+
+# === Backward Compatibility Functions ===
+# These maintain the old API while using model cards internally
+
+def get_model_layers(model_base):
+    """
+    DEPRECATED: Use model_card.layers instead.
+
+    This function is kept for backward compatibility.
+    """
+    from pipeline.model_utils.model_card_factory import create_model_card
+    model_card = create_model_card(model_base)
+    return model_card.layers
 
 
 if __name__ == "__main__":
