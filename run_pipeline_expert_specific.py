@@ -12,6 +12,14 @@ Key differences from standard Arditi pipeline:
 5. Applies intervention weighted by expert's routing probability
 """
 
+# Import for LoRA adapter support
+try:
+    from unsloth import FastLanguageModel
+    from peft import PeftModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    UNSLOTH_AVAILABLE = False
+
 import torch
 import random
 import json
@@ -30,13 +38,7 @@ from expert_specific_activations import get_expert_mean_diff
 from expert_intervention import get_expert_weighted_intervention_hooks
 from expert_selection_mlp import select_expert_direction
 
-# Import for LoRA adapter support
-try:
-    from unsloth import FastLanguageModel
-    from peft import PeftModel
-    UNSLOTH_AVAILABLE = True
-except ImportError:
-    UNSLOTH_AVAILABLE = False
+
 
 
 def load_model_with_optional_adapter(model_path, adapter_path=None):
@@ -316,7 +318,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         )
         harmless_train_scores = get_refusal_scores(
             model_base.model, harmless_train, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer, 
             refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
         )
 
