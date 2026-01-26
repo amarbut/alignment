@@ -5,8 +5,10 @@ import gc
 import numpy as np
 
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
-from vllm.distributed.parallel_state import destroy_model_parallel
+# Lazy import vllm to avoid dependency conflicts (e.g., with nanogcg)
+# vllm is only needed for harmbench methodology
+# from vllm import LLM, SamplingParams
+# from vllm.distributed.parallel_state import destroy_model_parallel
 import torch
 import litellm
 import time
@@ -156,6 +158,9 @@ def llamaguard2_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
 
 # taken from https://github.com/centerforaisafety/HarmBench/blob/main/evaluate_completions.py#L65
 def harmbench_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
+    # Lazy import vllm to avoid dependency conflicts
+    from vllm import LLM, SamplingParams
+    from vllm.distributed.parallel_state import destroy_model_parallel
 
     classifier = LLM(model='cais/HarmBench-Llama-2-13b-cls', tensor_parallel_size=1)
     classifier.llm_engine.tokenizer.truncation_side = "left"
