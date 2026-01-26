@@ -11,9 +11,21 @@ from pathlib import Path
 
 
 def load_expert_diffs(filepath: str = "expert_explore/oss_expert_diffs.json") -> Dict:
-    """Load expert frequency differences from JSON file."""
+    """
+    Load expert frequency differences from JSON file.
+
+    Handles both formats:
+    - Direct format: {"layer_0": [...], "layer_1": [...], ...}
+    - Metadata format: {"model_path": ..., "expert_diffs": {"layer_0": [...], ...}}
+    """
     with open(filepath, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+
+    # Check if this is the new format with metadata
+    if 'expert_diffs' in data:
+        return data['expert_diffs']
+
+    return data
 
 
 def select_experts_by_threshold(
@@ -35,7 +47,11 @@ def select_experts_by_threshold(
     selected = []
 
     for layer_str, experts_data in expert_diffs.items():
-        layer_idx = int(layer_str)
+        # Handle both "layer_0" format and plain "0" format
+        if layer_str.startswith('layer_'):
+            layer_idx = int(layer_str.replace('layer_', ''))
+        else:
+            layer_idx = int(layer_str)
 
         for expert_id, diff in experts_data:
             abs_diff = abs(diff)

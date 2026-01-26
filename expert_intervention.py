@@ -4,47 +4,24 @@ Expert-specific intervention via weighted activation addition.
 Implements activation addition where the steering direction is weighted
 by the target expert's routing weight, making it mathematically equivalent
 to adding the direction to the individual expert's output.
+
+Refactored to use ModelCard abstraction for model-agnostic MoE access.
 """
 
 import torch
-from typing import Tuple
+from typing import Tuple, Optional, List, TYPE_CHECKING
 from jaxtyping import Float
 from torch import Tensor
 
-
-def get_model_layers(model_base):
-    """
-    Navigate model structure to get layers, handling PEFT wrapping.
-
-    Supports:
-    - Standard: model.model.layers
-    - PEFT: model.base_model.model.layers or model.model.model.layers
-    """
-    if hasattr(model_base, 'model'):
-        current = model_base.model
-
-        # Navigate through PEFT/wrapper layers
-        while hasattr(current, 'model') or hasattr(current, 'base_model'):
-            if hasattr(current, 'base_model'):
-                current = current.base_model
-            elif hasattr(current, 'model'):
-                current = current.model
-            else:
-                break
-
-            if hasattr(current, 'layers'):
-                return current.layers
-
-        if hasattr(current, 'layers'):
-            return current.layers
-
-    raise AttributeError(f"Could not find model layers in {type(model_base)}")
+if TYPE_CHECKING:
+    from pipeline.model_utils.model_card import ModelCard
 
 
 def get_expert_weighted_activation_addition_hook(
     direction: Float[Tensor, "d_model"],
     expert_id: int,
-    coeff: float = 1.0
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
 ):
     """
     Create hook that adds direction weighted by expert's routing weight.
@@ -61,6 +38,7 @@ def get_expert_weighted_activation_addition_hook(
         direction: Steering direction to add [d_model]
         expert_id: Which expert this direction came from
         coeff: Coefficient for steering strength (positive or negative)
+        model_card: Optional ModelCard for output parsing (if None, assumes tuple format)
 
     Returns:
         Hook function
@@ -72,11 +50,17 @@ def get_expert_weighted_activation_addition_hook(
         Input: hidden_states [batch, seq, d_model]
         Output: (mlp_output [batch, seq, d_model], router_logits [batch*seq, num_experts])
         """
-        if not isinstance(output, tuple) or len(output) < 2:
-            # If output format is unexpected, don't modify
-            return output
+        # Parse output using model card if available
+        if model_card is not None:
+            mlp_output, router_logits = model_card.parse_mlp_output(output)
+        else:
+            # Fallback to tuple assumption
+            if not isinstance(output, tuple) or len(output) < 2:
+                return output
+            mlp_output, router_logits = output[0], output[1]
 
-        mlp_output, router_logits = output[0], output[1]
+        if router_logits is None:
+            return output
 
         # Get routing probabilities (softmax over experts)
         router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
@@ -94,7 +78,11 @@ def get_expert_weighted_activation_addition_hook(
         # Add to MLP output
         modified_output = mlp_output + coeff * weighted_direction
 
-        return (modified_output, router_logits)
+        # Wrap output using model card if available
+        if model_card is not None:
+            return model_card.wrap_mlp_output(modified_output, router_logits)
+        else:
+            return (modified_output, router_logits)
 
     return hook_fn
 
@@ -103,7 +91,8 @@ def get_expert_weighted_ablation_hook(
     direction: Float[Tensor, "d_model 1"],
     expert_id: int,
     mu_b: Float[Tensor, "d_model"],
-    tau: float = 1.0
+    tau: float = 1.0,
+    model_card: Optional["ModelCard"] = None
 ):
     """
     Create hook that ablates direction weighted by expert's routing weight.
@@ -112,10 +101,16 @@ def get_expert_weighted_ablation_hook(
     component of the direction from the MLP output.
     """
     def hook_fn(module, input, output):
-        if not isinstance(output, tuple) or len(output) < 2:
-            return output
+        # Parse output using model card if available
+        if model_card is not None:
+            mlp_output, router_logits = model_card.parse_mlp_output(output)
+        else:
+            if not isinstance(output, tuple) or len(output) < 2:
+                return output
+            mlp_output, router_logits = output[0], output[1]
 
-        mlp_output, router_logits = output[0], output[1]
+        if router_logits is None:
+            return output
 
         # Get routing probabilities
         router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
@@ -139,7 +134,11 @@ def get_expert_weighted_ablation_hook(
         # Add back mu_b
         modified_output = ablated + mu_b.to(mlp_output.device, mlp_output.dtype)
 
-        return (modified_output, router_logits)
+        # Wrap output using model card if available
+        if model_card is not None:
+            return model_card.wrap_mlp_output(modified_output, router_logits)
+        else:
+            return (modified_output, router_logits)
 
     return hook_fn
 
@@ -149,7 +148,8 @@ def get_expert_weighted_intervention_hooks(
     layer_idx: int,
     expert_id: int,
     direction: Float[Tensor, "d_model"],
-    coeff: float = 1.0
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
 ) -> Tuple[list, list]:
     """
     Get hooks for expert-weighted activation addition intervention.
@@ -160,19 +160,25 @@ def get_expert_weighted_intervention_hooks(
         expert_id: Which expert the direction came from
         direction: Steering direction [d_model]
         coeff: Coefficient (positive to enhance, negative to suppress)
+        model_card: Optional ModelCard (created if not provided)
 
     Returns:
         (fwd_pre_hooks, fwd_hooks) tuple
     """
-    # Get the MLP module at the specified layer
-    layers = get_model_layers(model_base)
-    mlp_module = layers[layer_idx].mlp
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
+    # Get the MLP module via model card
+    mlp_module = model_card.get_mlp_module(layer_idx)
 
     # Create the weighted intervention hook
     hook_fn = get_expert_weighted_activation_addition_hook(
         direction=direction,
         expert_id=expert_id,
-        coeff=coeff
+        coeff=coeff,
+        model_card=model_card
     )
 
     # Return as forward hooks (not pre-hooks, since we need MLP output)
@@ -183,8 +189,9 @@ def get_expert_weighted_intervention_hooks(
 
 
 def get_multi_expert_weighted_activation_addition_hook(
-    directions: list,  # List of (direction, expert_id) tuples
-    coeff: float = 1.0
+    directions: List[Tuple[Tensor, int]],  # List of (direction, expert_id) tuples
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
 ):
     """
     Create hook that adds multiple directions, each weighted by its expert's routing weight.
@@ -194,6 +201,7 @@ def get_multi_expert_weighted_activation_addition_hook(
     Args:
         directions: List of (direction, expert_id) tuples
         coeff: Coefficient for steering strength (applies to all directions)
+        model_card: Optional ModelCard for output parsing
 
     Returns:
         Hook function
@@ -202,10 +210,16 @@ def get_multi_expert_weighted_activation_addition_hook(
         """
         Hook that modifies MLP output based on multiple expert routing weights.
         """
-        if not isinstance(output, tuple) or len(output) < 2:
-            return output
+        # Parse output using model card if available
+        if model_card is not None:
+            mlp_output, router_logits = model_card.parse_mlp_output(output)
+        else:
+            if not isinstance(output, tuple) or len(output) < 2:
+                return output
+            mlp_output, router_logits = output[0], output[1]
 
-        mlp_output, router_logits = output[0], output[1]
+        if router_logits is None:
+            return output
 
         # Get routing probabilities (softmax over experts)
         router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
@@ -231,15 +245,20 @@ def get_multi_expert_weighted_activation_addition_hook(
         # Add to MLP output
         modified_output = mlp_output + coeff * total_modification
 
-        return (modified_output, router_logits)
+        # Wrap output using model card if available
+        if model_card is not None:
+            return model_card.wrap_mlp_output(modified_output, router_logits)
+        else:
+            return (modified_output, router_logits)
 
     return hook_fn
 
 
 def get_multi_expert_weighted_intervention_hooks(
     model_base,
-    expert_directions: list,  # List of (layer_idx, expert_id, direction) tuples
-    coeff: float = 1.0
+    expert_directions: List[Tuple[int, int, Tensor]],  # List of (layer_idx, expert_id, direction) tuples
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
 ) -> Tuple[list, list]:
     """
     Get hooks for multi-expert weighted activation addition intervention.
@@ -251,10 +270,16 @@ def get_multi_expert_weighted_intervention_hooks(
         model_base: The model
         expert_directions: List of (layer_idx, expert_id, direction) tuples
         coeff: Coefficient (positive to enhance, negative to suppress)
+        model_card: Optional ModelCard (created if not provided)
 
     Returns:
         (fwd_pre_hooks, fwd_hooks) tuple
     """
+    # Get or create model card
+    if model_card is None:
+        from pipeline.model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
     # Group directions by layer
     layer_directions = {}
     for layer_idx, expert_id, direction in expert_directions:
@@ -262,24 +287,36 @@ def get_multi_expert_weighted_intervention_hooks(
             layer_directions[layer_idx] = []
         layer_directions[layer_idx].append((direction, expert_id))
 
-    # Get model layers
-    layers = get_model_layers(model_base)
-
     # Create hooks for each layer
     fwd_hooks = []
     for layer_idx, directions in layer_directions.items():
-        mlp_module = layers[layer_idx].mlp
+        mlp_module = model_card.get_mlp_module(layer_idx)
 
         # Create the multi-expert weighted intervention hook
         hook_fn = get_multi_expert_weighted_activation_addition_hook(
             directions=directions,
-            coeff=coeff
+            coeff=coeff,
+            model_card=model_card
         )
 
         fwd_hooks.append((mlp_module, hook_fn))
 
     fwd_pre_hooks = []
     return fwd_pre_hooks, fwd_hooks
+
+
+# === Backward Compatibility Functions ===
+# These maintain the old API while using model cards internally
+
+def get_model_layers(model_base):
+    """
+    DEPRECATED: Use model_card.layers instead.
+
+    This function is kept for backward compatibility.
+    """
+    from pipeline.model_utils.model_card_factory import create_model_card
+    model_card = create_model_card(model_base)
+    return model_card.layers
 
 
 if __name__ == "__main__":

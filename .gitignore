@@ -1,0 +1,11 @@
+__pycache__/ 
+*__pycache__/ 
+*.log 
+*.pt 
+*.json 
+.ipynb_checkpoints/
+*.pyc
+test*
+pipeline/runs/*
+*.md
+*.sh

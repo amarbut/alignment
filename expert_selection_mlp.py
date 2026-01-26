@@ -17,12 +17,15 @@ import math
 import matplotlib.pyplot as plt
 import os
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from jaxtyping import Float
 from torch import Tensor
 from tqdm import tqdm
 
 from pipeline.model_utils.model_base import ModelBase
+
+if TYPE_CHECKING:
+    from pipeline.model_utils.model_card import ModelCard
 from pipeline.utils.hook_utils import add_hooks
 from pipeline.submodules.select_direction import (
     refusal_score,
@@ -157,7 +160,8 @@ def select_expert_direction(
     induce_refusal_threshold=-5.0, # decreased from 0 for MoE models
     prune_layer_percentage=0.2,
     batch_size=32,
-    top_n=1
+    top_n=1,
+    model_card: Optional["ModelCard"] = None
 ):
     """
     Select best expert-specific direction(s) by testing at MLP output level.
@@ -225,15 +229,15 @@ def select_expert_direction(
             direction_vec = candidate_directions[source_pos, candidate_idx]
 
             # Get MLP module for this layer
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Use negative actAdd (induce refusal) instead of ablation
             # This should increase refusal on harmless without breaking the model
             negative_add_hook = get_expert_weighted_activation_addition_hook(
                 direction=direction_vec,
                 expert_id=expert,
-                coeff=-coeff  # Negative to induce refusal
+                coeff=-coeff,  # Negative to induce refusal
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, negative_add_hook)]
 
@@ -259,14 +263,14 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Use negative actAdd (reduce refusal)
             negative_add_hook = get_expert_weighted_activation_addition_hook(
                 direction=direction_vec,
                 expert_id=expert,
-                coeff=-coeff  # Negative to reduce refusal
+                coeff=-coeff,  # Negative to reduce refusal
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, negative_add_hook)]
 
@@ -285,14 +289,14 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             refusal_vector = candidate_directions[source_pos, candidate_idx]
-            layers = get_model_layers(model_base)
-            mlp_module = layers[layer].mlp
+            mlp_module = model_card.get_mlp_module(layer)
 
             # Add direction to MLP output, weighted by expert's routing probability
             addition_hook = get_expert_weighted_activation_addition_hook(
                 direction=refusal_vector,
                 expert_id=expert,
-                coeff=coeff
+                coeff=coeff,
+                model_card=model_card
             )
             fwd_hooks = [(mlp_module, addition_hook)]
 
