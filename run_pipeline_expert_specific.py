@@ -12,6 +12,14 @@ Key differences from standard Arditi pipeline:
 5. Applies intervention weighted by expert's routing probability
 """
 
+# Import for LoRA adapter support
+try:
+    from unsloth import FastLanguageModel
+    from peft import PeftModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    UNSLOTH_AVAILABLE = False
+
 import torch
 import random
 import json
@@ -30,14 +38,7 @@ from expert_specific_activations import get_expert_mean_diff
 from expert_intervention import get_expert_weighted_intervention_hooks
 from expert_selection_mlp import select_expert_direction
 
-# Import for LoRA adapter support
-try:
-    import fix_hf_cache
-    from unsloth import FastLanguageModel
-    from peft import PeftModel
-    UNSLOTH_AVAILABLE = True
-except ImportError:
-    UNSLOTH_AVAILABLE = False
+
 
 
 def load_model_with_optional_adapter(model_path, adapter_path=None):
@@ -317,7 +318,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         )
         harmless_train_scores = get_refusal_scores(
             model_base.model, harmless_train, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            model_base.refusal_toks, tokenizer=model_base.tokenizer, 
             refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
         )
 
@@ -445,6 +446,7 @@ def select_best_expert_direction(
     harmless_val,
     expert_directions,
     artifact_dir,
+    model_card,
     top_n=1
 ):
     """
@@ -483,7 +485,8 @@ def select_best_expert_direction(
         coeff=args.coeff,  # Use command-line argument
         mu_b=mu_b,
         tau=1.0,
-        top_n=top_n
+        top_n=top_n,
+        model_card=model_card
     )
 
     # Handle single vs multiple directions
@@ -636,6 +639,11 @@ def run_expert_specific_pipeline(args):
     print("="*80)
     model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path)
 
+    # Create model card for MoE-specific operations
+    from pipeline.model_utils.model_card_factory import create_model_card
+    model_card = create_model_card(model_base)
+    print(f"Model card: {type(model_card).__name__}")
+
     # Load datasets
     print("\n" + "="*80)
     print("LOADING DATASETS")
@@ -664,9 +672,27 @@ def run_expert_specific_pipeline(args):
     print("\n" + "="*80)
     print("SELECTING CANDIDATE EXPERTS")
     print("="*80)
+
+    # Get model-specific expert diffs path
+    expert_diffs_filename = model_card.get_expert_diffs_filename()
+    expert_diffs_path = f"expert_explore/{expert_diffs_filename}"
+
+    # Generate expert diffs if they don't exist
+    if not os.path.exists(expert_diffs_path):
+        print(f"Expert diffs not found at {expert_diffs_path}, generating...")
+        os.makedirs("expert_explore", exist_ok=True)
+        model_card.generate_expert_diffs(
+            harmful_dataset_path="dataset/splits/harmful_train.json",
+            harmless_dataset_path="dataset/splits/harmless_train.json",
+            output_path=expert_diffs_path,
+            batch_size=args.batch_size
+        )
+        print(f"Expert diffs saved to {expert_diffs_path}")
+
     candidate_experts = get_candidate_experts(
         threshold=args.threshold,
-        expert_type=args.expert_type
+        expert_type=args.expert_type,
+        expert_diffs_path=expert_diffs_path
     )
 
     # Save candidate expert info
@@ -703,7 +729,8 @@ def run_expert_specific_pipeline(args):
             harmless_val,
             expert_directions,
             artifact_dir=os.path.join(output_dir, "selection"),
-            top_n=args.top_n
+            top_n=args.top_n,
+            model_card=model_card
         )
 
         # Handle single vs multiple directions
