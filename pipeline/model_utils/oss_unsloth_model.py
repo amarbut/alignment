@@ -4,6 +4,13 @@ OSS Model class for Unsloth models.
 Uses FastLanguageModel.from_pretrained() instead of AutoModelForCausalLM
 to properly load 4-bit quantized unsloth models.
 """
+try:
+    from unsloth import FastLanguageModel
+except ImportError:
+    raise ImportError(
+        "unsloth is required for UnslothOSSModel. "
+        "Install it with: pip install unsloth"
+    )
 
 import torch
 import functools
@@ -20,13 +27,7 @@ from pipeline.model_utils.oss_model import (
 )
 from pipeline.model_utils.hf_cache_config import set_hf_cache
 
-try:
-    from unsloth import FastLanguageModel
-except ImportError:
-    raise ImportError(
-        "unsloth is required for UnslothOSSModel. "
-        "Install it with: pip install unsloth"
-    )
+
 
 
 class UnslothOSSModel(OSSModel):
