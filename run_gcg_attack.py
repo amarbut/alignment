@@ -358,13 +358,19 @@ def main():
         default=False,
         help="Use nanogcg library if installed (not recommended due to dependency conflicts)",
     )
+    parser.add_argument(
+        "--suffix_length",
+        type=int,
+        default=20,
+        help="Number of tokens in adversarial suffix (default: 20)",
+    )
 
     # Generation settings
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=512,
-        help="Max tokens to generate",
+        default=100,
+        help="Max tokens to generate for evaluation (default: 100)",
     )
     parser.add_argument(
         "--temperature",
@@ -435,12 +441,17 @@ def main():
         json.dump(config_dict, f, indent=2)
 
     # Create GCG config
+    # Generate initial suffix string based on suffix_length
+    optim_str_init = " ".join(["!"] * args.suffix_length)
+    print(f"Suffix length: {args.suffix_length} tokens")
+
     gcg_config = GCGConfig(
         num_steps=args.num_steps,
         search_width=args.search_width,
         topk=args.topk,
         batch_size=args.batch_size,
         seed=args.seed,
+        optim_str_init=optim_str_init,
     )
 
     # Load model
