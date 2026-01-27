@@ -1,11 +1,11 @@
 """
-DeepSeek-MoE-16B-Chat model implementation.
+OLMoE-1B-7B-Instruct model implementation.
 
 Special features:
-- 64 routed + 2 shared experts per MoE layer
-- First layer is dense (not MoE)
-- Top-6 routing
-- Standard chat template format
+- 64 experts per MoE layer
+- Top-8 routing (8 of 64 experts per token)
+- 16 layers total
+- All layers are MoE (no dense layers)
 """
 
 import torch
@@ -18,61 +18,45 @@ from pipeline.model_utils.model_base import ModelBase
 from pipeline.model_utils.hf_cache_config import set_hf_cache
 
 
-# DeepSeek refusal tokens (common refusal starters)
-# Verified with tokenizer:
-#   'I' -> [40]
-#   ' Sorry' -> [32025]
-#   ' As' -> [1733]
-#   ' I' -> [304]
-DEEPSEEK_REFUSAL_TOKS = [40, 304, 32025, 1733]  # 'I', ' I', ' Sorry', ' As'
+# OLMoE refusal tokens - to be verified with tokenizer
+OLMOE_REFUSAL_TOKS = []  # Will be set after tokenizer loads
 
 
-def format_instruction_deepseek_chat(
+def format_instruction_olmoe_chat(
     instruction: str,
     output: str = None,
     system: str = None,
     include_trailing_whitespace: bool = True
 ):
-    """Format instruction for DeepSeek chat model."""
-    # DeepSeek uses a simple User/Assistant format
-    formatted = f"User: {instruction}\n\nAssistant:"
-
-    if include_trailing_whitespace:
-        formatted += " "
-
-    if output is not None:
-        formatted += output
-
-    return formatted
+    """Format instruction for OLMoE chat model using chat template."""
+    # OLMoE uses a standard chat format
+    # We'll use the tokenizer's chat template in tokenize function
+    return instruction
 
 
-def tokenize_instructions_deepseek_chat(
+def tokenize_instructions_olmoe_chat(
     tokenizer: AutoTokenizer,
     instructions: List[str],
     outputs: List[str] = None,
     system: str = None,
     include_trailing_whitespace: bool = True
 ):
-    """Tokenize instructions for DeepSeek chat model."""
-    if outputs is not None:
-        prompts = [
-            format_instruction_deepseek_chat(
-                instruction=instruction,
-                output=output,
-                system=system,
-                include_trailing_whitespace=include_trailing_whitespace
-            )
-            for instruction, output in zip(instructions, outputs)
-        ]
-    else:
-        prompts = [
-            format_instruction_deepseek_chat(
-                instruction=instruction,
-                system=system,
-                include_trailing_whitespace=include_trailing_whitespace
-            )
-            for instruction in instructions
-        ]
+    """Tokenize instructions for OLMoE chat model."""
+    prompts = []
+    for i, instruction in enumerate(instructions):
+        messages = [{"role": "user", "content": instruction}]
+
+        # Use chat template
+        formatted = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        if outputs is not None:
+            formatted += outputs[i]
+
+        prompts.append(formatted)
 
     result = tokenizer(
         prompts,
@@ -84,12 +68,12 @@ def tokenize_instructions_deepseek_chat(
     return result
 
 
-class DeepSeekModel(ModelBase):
-    """ModelBase implementation for DeepSeek-MoE-16B-Chat."""
+class OLMoEModel(ModelBase):
+    """ModelBase implementation for OLMoE-1B-7B-Instruct."""
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
-        # Set HF cache location for DeepSeek models
-        set_hf_cache('deepseek')
+        # Set HF cache location
+        set_hf_cache('oss')  # Use same cache as OSS models
 
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
@@ -118,21 +102,32 @@ class DeepSeekModel(ModelBase):
 
     def _get_tokenize_instructions_fn(self):
         return functools.partial(
-            tokenize_instructions_deepseek_chat,
+            tokenize_instructions_olmoe_chat,
             tokenizer=self.tokenizer,
             system=None,
             include_trailing_whitespace=True
         )
 
     def _get_eoi_toks(self):
-        # End of instruction tokens
-        return self.tokenizer.encode("\n\n", add_special_tokens=False)
+        # End of instruction tokens - the assistant prompt marker
+        # OLMoE uses <|assistant|> token
+        return self.tokenizer.encode("<|assistant|>", add_special_tokens=False)
 
     def _get_refusal_toks(self):
-        return DEEPSEEK_REFUSAL_TOKS
+        # Common refusal starters for OLMoE
+        # Verified with tokenizer - include both with and without leading space
+        # 'I' -> 42, ' I' -> 309, 'As' -> 1909, ' As' -> 1284,
+        # 'Sorry' -> 15953, ' Sorry' -> 26070
+        refusal_starters = ['I', ' I', 'As', ' As', 'Sorry', ' Sorry']
+        toks = []
+        for starter in refusal_starters:
+            encoded = self.tokenizer.encode(starter, add_special_tokens=False)
+            if len(encoded) > 0:
+                toks.append(encoded[0])
+        return list(set(toks))  # Remove duplicates
 
     def _get_refusal_phrases(self):
-        phrases = [" I'm sorry", " I cannot", " I can't", " As an AI", "I am unable", "I don't"]
+        phrases = [" I'm sorry", " I cannot", " I can't", " As an AI", " I am unable", " I don't"]
         return [self.tokenizer.encode(p, add_special_tokens=False) for p in phrases]
 
     def _get_model_block_modules(self):

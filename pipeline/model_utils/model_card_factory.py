@@ -57,6 +57,11 @@ def create_model_card(model_base) -> ModelCard:
         from pipeline.model_utils.deepseek_model_card import DeepSeekModelCard
         return DeepSeekModelCard(model_base.model, model_base)
 
+    # === OLMoE Detection ===
+    elif 'OLMoEModel' in model_type or 'olmoe' in model_path or 'olmoe' in arch_str:
+        from pipeline.model_utils.olmoe_model_card import OLMoEModelCard
+        return OLMoEModelCard(model_base.model, model_base)
+
     else:
         raise ValueError(
             f"No model card available for:\n"

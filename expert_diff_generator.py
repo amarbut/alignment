@@ -88,12 +88,24 @@ def extract_expert_routing(
     layer_expert_counts = defaultdict(lambda: defaultdict(int))
     total_tokens_analyzed = 0
 
+    # Determine hook strategy based on model type
+    use_router_hooks = model_card.uses_router_hook_for_routing()
+    router_output_format = model_card.get_router_output_format() if use_router_hooks else "logits"
+
     # Register hooks on all MoE layers
     hooks = []
     for layer_idx in range(model_card.get_num_layers()):
         if model_card.is_moe_layer(layer_idx):
-            mlp = model_card.get_mlp_module(layer_idx)
-            hook = mlp.register_forward_hook(create_mlp_hook(layer_idx, model_card))
+            if use_router_hooks:
+                # Hook router directly (for DeepSeek-style models)
+                router = model_card.get_router(layer_idx)
+                hook = router.register_forward_hook(
+                    model_card.create_router_hook(layer_idx, router_outputs)
+                )
+            else:
+                # Hook MLP (for OSS/Mixtral-style models)
+                mlp = model_card.get_mlp_module(layer_idx)
+                hook = mlp.register_forward_hook(create_mlp_hook(layer_idx, model_card))
             hooks.append(hook)
 
     try:
@@ -108,7 +120,7 @@ def extract_expert_routing(
             attention_mask = tokenized.attention_mask.to(model.device)
 
             # Clear previous router outputs
-            router_outputs = {}
+            router_outputs.clear()
 
             # Forward pass (hooks capture router outputs)
             try:
@@ -138,24 +150,45 @@ def extract_expert_routing(
                     if not model_card.is_moe_layer(layer_idx):
                         continue
 
-                    # router_logits shape: (batch_size * seq_len, num_experts)
-                    router_logits_flat = router_outputs[layer_idx]
-                    batch_size_cur = len(batch_prompts)
-                    seq_len_padded = input_ids.shape[1]
-                    num_experts = router_logits_flat.shape[-1]
+                    if router_output_format == "top_k_indices":
+                        # DeepSeek-style: router_outputs[layer_idx] = {'indices': ..., 'weights': ...}
+                        routing_data = router_outputs[layer_idx]
+                        top_k_indices = routing_data['indices']  # [batch*seq, k]
 
-                    # Reshape to (batch_size, seq_len, num_experts)
-                    router_logits = router_logits_flat.view(batch_size_cur, seq_len_padded, num_experts)
+                        batch_size_cur = len(batch_prompts)
+                        seq_len_padded = input_ids.shape[1]
+                        k = top_k_indices.shape[-1]
 
-                    # Get logits for this sample's analyzed positions
-                    layer_router = router_logits[batch_idx, start_pos:end_pos, :]
+                        # Reshape to (batch_size, seq_len, k)
+                        indices_reshaped = top_k_indices.view(batch_size_cur, seq_len_padded, k)
 
-                    # Get top expert for each token
-                    top_experts = torch.argmax(layer_router, dim=-1).cpu().numpy()
+                        # Get indices for this sample's analyzed positions
+                        sample_indices = indices_reshaped[batch_idx, start_pos:end_pos, :]  # [num_pos, k]
 
-                    # Count activations
-                    for expert_id in top_experts:
-                        layer_expert_counts[layer_idx][int(expert_id)] += 1
+                        # Count each expert that appears in top-k (count top-1 only for consistency)
+                        top_experts = sample_indices[:, 0].cpu().numpy()  # Just top-1
+                        for expert_id in top_experts:
+                            layer_expert_counts[layer_idx][int(expert_id)] += 1
+
+                    else:
+                        # OSS/Mixtral-style: router_outputs[layer_idx] = logits tensor
+                        router_logits_flat = router_outputs[layer_idx]
+                        batch_size_cur = len(batch_prompts)
+                        seq_len_padded = input_ids.shape[1]
+                        num_experts = router_logits_flat.shape[-1]
+
+                        # Reshape to (batch_size, seq_len, num_experts)
+                        router_logits = router_logits_flat.view(batch_size_cur, seq_len_padded, num_experts)
+
+                        # Get logits for this sample's analyzed positions
+                        layer_router = router_logits[batch_idx, start_pos:end_pos, :]
+
+                        # Get top expert for each token
+                        top_experts = torch.argmax(layer_router, dim=-1).cpu().numpy()
+
+                        # Count activations
+                        for expert_id in top_experts:
+                            layer_expert_counts[layer_idx][int(expert_id)] += 1
 
                 total_tokens_analyzed += num_positions
 

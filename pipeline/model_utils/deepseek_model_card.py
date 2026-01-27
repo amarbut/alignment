@@ -6,10 +6,16 @@ Special features:
 - 64 routed + 2 shared experts per MoE layer
 - Top-6 routing (6 of 64 routed experts per token)
 - Standard gating network (linear projection + softmax)
+
+KEY DIFFERENCE from OSS/Mixtral:
+- Router returns (top_k_indices, top_k_weights, aux_loss) NOT raw logits
+- MLP output is just a tensor, NOT (hidden_states, router_logits)
+- Must hook router directly to capture routing decisions
 """
 
 import torch
 import torch.nn as nn
+from typing import Optional, Tuple
 from pipeline.model_utils.model_card import ModelCard
 
 
@@ -149,3 +155,63 @@ class DeepSeekModelCard(ModelCard):
     def get_expert_diffs_filename(self) -> str:
         """Return filename for DeepSeek expert diffs."""
         return "deepseek_expert_diffs.json"
+
+    def get_router_output_format(self) -> str:
+        """
+        Return how router outputs routing information.
+
+        DeepSeek returns 'top_k_indices' - the router outputs (indices, weights, aux)
+        instead of raw logits for all experts.
+        """
+        return "top_k_indices"
+
+    def parse_router_output(self, output) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Parse router output into (top_k_indices, top_k_weights).
+
+        DeepSeek's MoEGate returns:
+        - [0]: top_k_indices [batch*seq, k] - which experts were selected
+        - [1]: top_k_weights [batch*seq, k] - their routing weights
+        - [2]: aux_loss (usually None)
+
+        Returns:
+            (top_k_indices, top_k_weights) or (None, None) if not available
+        """
+        if isinstance(output, tuple) and len(output) >= 2:
+            top_k_indices = output[0]  # [batch*seq, k]
+            top_k_weights = output[1]  # [batch*seq, k]
+            return top_k_indices, top_k_weights
+        return None, None
+
+    def create_router_hook(self, layer_idx: int, storage_dict: dict):
+        """
+        Create a hook for capturing router outputs.
+
+        For DeepSeek, we hook the router directly since MLP doesn't
+        return router_logits.
+
+        Args:
+            layer_idx: Layer index
+            storage_dict: Dictionary to store captured outputs
+
+        Returns:
+            Hook function
+        """
+        model_card = self
+
+        def hook(module, input, output):
+            top_k_indices, top_k_weights = model_card.parse_router_output(output)
+            if top_k_indices is not None:
+                storage_dict[layer_idx] = {
+                    'indices': top_k_indices.detach().cpu(),
+                    'weights': top_k_weights.detach().cpu() if top_k_weights is not None else None
+                }
+
+        return hook
+
+    def uses_router_hook_for_routing(self) -> bool:
+        """
+        Return True if this model requires hooking the router directly
+        to capture routing decisions (vs getting them from MLP output).
+        """
+        return True

@@ -201,3 +201,61 @@ class ModelCard(ABC):
             num_harmful=num_harmful,
             num_harmless=num_harmless
         )
+
+    # === Router Output Handling (for models with different routing output formats) ===
+
+    def uses_router_hook_for_routing(self) -> bool:
+        """
+        Return True if this model requires hooking the router directly
+        to capture routing decisions (vs getting them from MLP output).
+
+        Default: False (most models return router_logits in MLP output)
+        Override in subclasses for models like DeepSeek that don't.
+        """
+        return False
+
+    def get_router_output_format(self) -> str:
+        """
+        Return how router outputs routing information.
+
+        Options:
+        - 'logits': Raw logits for all experts [batch*seq, num_experts]
+        - 'top_k_indices': Top-k expert indices and weights
+
+        Default: 'logits'
+        """
+        return "logits"
+
+    def parse_router_output(self, output):
+        """
+        Parse router output. Default assumes raw logits.
+        Override for models with different formats.
+
+        Returns:
+            For 'logits': router_logits tensor
+            For 'top_k_indices': (indices, weights) tuple
+        """
+        if isinstance(output, torch.Tensor):
+            return output
+        elif isinstance(output, tuple) and len(output) > 0:
+            return output[0]
+        return None
+
+    def create_router_hook(self, layer_idx: int, storage_dict: dict):
+        """
+        Create a hook for capturing router outputs.
+        Default implementation for models returning logits.
+
+        Args:
+            layer_idx: Layer index
+            storage_dict: Dictionary to store captured outputs
+
+        Returns:
+            Hook function
+        """
+        def hook(module, input, output):
+            router_logits = self.parse_router_output(output)
+            if router_logits is not None:
+                storage_dict[layer_idx] = router_logits.detach().cpu()
+
+        return hook
