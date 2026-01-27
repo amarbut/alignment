@@ -19,7 +19,12 @@ from pipeline.model_utils.hf_cache_config import set_hf_cache
 
 
 # DeepSeek refusal tokens (common refusal starters)
-DEEPSEEK_REFUSAL_TOKS = [40, 8016, 1699]  # 'I', 'Sorry', 'As' - verify with tokenizer
+# Verified with tokenizer:
+#   'I' -> [40]
+#   ' Sorry' -> [32025]
+#   ' As' -> [1733]
+#   ' I' -> [304]
+DEEPSEEK_REFUSAL_TOKS = [40, 304, 32025, 1733]  # 'I', ' I', ' Sorry', ' As'
 
 
 def format_instruction_deepseek_chat(

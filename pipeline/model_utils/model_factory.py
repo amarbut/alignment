@@ -35,5 +35,8 @@ def construct_model_base(model_path: str) -> ModelBase:
     elif 'deepseek' in model_path.lower():
         from pipeline.model_utils.deepseek_model import DeepSeekModel
         return DeepSeekModel(model_path)
+    elif 'olmoe' in model_path.lower():
+        from pipeline.model_utils.olmoe_model import OLMoEModel
+        return OLMoEModel(model_path)
     else:
         raise ValueError(f"Unknown model family: {model_path}")

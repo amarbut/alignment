@@ -95,8 +95,24 @@ def load_model_with_optional_adapter(model_path, adapter_path=None):
         )
 
         # Set generation function
-        def generate_completions(instructions, fwd_pre_hooks=None, fwd_hooks=None, max_new_tokens=256, batch_size=8):
+        def generate_completions(dataset, fwd_pre_hooks=None, fwd_hooks=None, max_new_tokens=256, batch_size=8):
+            """Generate completions for a dataset with optional hooks.
+
+            Args:
+                dataset: List of dicts with 'instruction' and 'category' keys
+                fwd_pre_hooks: List of (module, hook_fn) tuples for forward pre-hooks
+                fwd_hooks: List of (module, hook_fn) tuples for forward hooks
+                max_new_tokens: Maximum tokens to generate
+                batch_size: Batch size for generation
+
+            Returns:
+                List of dicts with 'prompt', 'response', and 'category' keys
+            """
             completions = []
+
+            # Extract instructions and categories from dataset
+            instructions = [x['instruction'] for x in dataset]
+            categories = [x['category'] for x in dataset]
 
             # Register hooks
             hook_handles = []
@@ -112,6 +128,7 @@ def load_model_with_optional_adapter(model_path, adapter_path=None):
             try:
                 for i in range(0, len(instructions), batch_size):
                     batch_instructions = instructions[i:i+batch_size]
+                    batch_categories = categories[i:i+batch_size]
 
                     tokenized = model_base.tokenize_instructions_fn(
                         batch_instructions,
@@ -138,7 +155,7 @@ def load_model_with_optional_adapter(model_path, adapter_path=None):
                         completions.append({
                             "prompt": batch_instructions[j],
                             "response": completion,
-                            "category": "unknown"
+                            "category": batch_categories[j]
                         })
             finally:
                 for handle in hook_handles:
@@ -260,6 +277,14 @@ def parse_arguments():
         type=int,
         default=1,
         help='Number of top vectors to select and use for steering (default: 1)'
+    )
+
+    parser.add_argument(
+        '--eval_datasets',
+        type=str,
+        nargs='+',
+        default=None,
+        help='Evaluation datasets to use (default: uses config). Options: jailbreakbench, advbench, tdc2023, maliciousinstruct, strongreject, harmbench_test'
     )
 
     return parser.parse_args()
@@ -619,6 +644,11 @@ def run_expert_specific_pipeline(args):
         model_alias += f"_top{args.top_n}"
 
     cfg = Config(model_alias=model_alias, model_path=args.model_path)
+
+    # Override evaluation datasets if specified via CLI
+    if args.eval_datasets is not None:
+        cfg.evaluation_datasets = tuple(args.eval_datasets)
+        print(f"Using custom evaluation datasets: {cfg.evaluation_datasets}")
 
     # Create output directory
     base_output_dir = os.path.join(cfg.artifact_path(), f"threshold_{args.threshold}")
