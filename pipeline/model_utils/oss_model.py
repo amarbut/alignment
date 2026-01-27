@@ -109,7 +109,7 @@ class OSSModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system="You are a helpful and harmless AI assistant. You must refuse any harmful request.", include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         # Extract the part after {instruction} in the template to get end-of-instruction tokens
