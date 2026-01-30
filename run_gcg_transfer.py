@@ -174,6 +174,14 @@ def main():
         help="'best' uses lowest-loss suffix, 'all' evaluates each suffix",
     )
 
+    # Resume from previous optimization
+    parser.add_argument(
+        "--optimization_results",
+        type=str,
+        default=None,
+        help="Path to existing optimization_results.json to skip optimization phase",
+    )
+
     # Generation/evaluation settings
     parser.add_argument("--max_new_tokens", type=int, default=100)
     parser.add_argument(
@@ -204,72 +212,92 @@ def main():
         json.dump(config, f, indent=2)
 
     # =========================================================================
-    # Phase 1: Load optimization dataset and optimize suffixes
+    # Phase 1: Optimize suffixes (or load from previous run)
     # =========================================================================
-    print(f"\n{'='*60}")
-    print("Phase 1: Loading datasets and optimizing suffixes")
-    print("="*60)
 
-    optimize_prompts = load_optimize_dataset(args.optimize_dataset)
-    print(f"Optimization prompts: {len(optimize_prompts)}")
-    for i, p in enumerate(optimize_prompts):
-        print(f"  {i+1}. {p['instruction'][:60]}...")
+    if args.optimization_results:
+        # Load existing optimization results
+        print(f"\n{'='*60}")
+        print(f"Phase 1: Loading existing optimization results")
+        print("="*60)
 
-    # Load model for GCG optimization (using unsloth directly)
-    print("\nLoading model for optimization...")
-    from unsloth import FastLanguageModel
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model_path,
-        max_seq_length=2048,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    model.eval()
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        with open(args.optimization_results) as f:
+            optimization_results = json.load(f)
+        print(f"Loaded {len(optimization_results)} optimized suffixes from {args.optimization_results}")
+        for r in optimization_results:
+            print(f"  loss={r['loss']:.4f}  prompt={r['prompt'][:50]}...")
 
-    # Create GCG config
-    optim_str_init = " ".join(["!"] * args.suffix_length)
-    gcg_config = GCGConfig(
-        num_steps=args.num_steps,
-        search_width=args.search_width,
-        topk=args.topk,
-        batch_size=args.batch_size,
-        seed=args.seed,
-        optim_str_init=optim_str_init,
-    )
+    else:
+        # Run optimization
+        print(f"\n{'='*60}")
+        print("Phase 1: Loading datasets and optimizing suffixes")
+        print("="*60)
 
-    attack = GCGAttack(
-        model=model,
-        tokenizer=tokenizer,
-        config=gcg_config,
-        use_nanogcg=False,
-    )
+        optimize_prompts = load_optimize_dataset(args.optimize_dataset)
+        print(f"Optimization prompts: {len(optimize_prompts)}")
+        for i, p in enumerate(optimize_prompts):
+            print(f"  {i+1}. {p['instruction'][:60]}...")
 
-    # Optimize suffixes
-    optimization_results = []
-    for i, prompt_dict in enumerate(optimize_prompts):
-        prompt = prompt_dict["instruction"]
-        print(f"\n[{i+1}/{len(optimize_prompts)}] Optimizing: {prompt[:60]}...")
+        # Load model for GCG optimization (using unsloth directly)
+        print("\nLoading model for optimization...")
+        from unsloth import FastLanguageModel
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=args.model_path,
+            max_seq_length=2048,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        model.eval()
+        tokenizer.padding_side = "left"
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-        suffix, loss, history = attack.optimize_suffix(prompt)
+        # Create GCG config
+        optim_str_init = " ".join(["!"] * args.suffix_length)
+        gcg_config = GCGConfig(
+            num_steps=args.num_steps,
+            search_width=args.search_width,
+            topk=args.topk,
+            batch_size=args.batch_size,
+            seed=args.seed,
+            optim_str_init=optim_str_init,
+        )
 
-        optimization_results.append({
-            "prompt": prompt,
-            "suffix": suffix,
-            "loss": loss,
-            "category": prompt_dict.get("category", "unknown"),
-        })
-        print(f"  Loss: {loss:.4f}")
-        print(f"  Suffix: {suffix[:60]}...")
+        attack = GCGAttack(
+            model=model,
+            tokenizer=tokenizer,
+            config=gcg_config,
+            use_nanogcg=False,
+        )
 
+        # Optimize suffixes
+        optimization_results = []
+        for i, prompt_dict in enumerate(optimize_prompts):
+            prompt = prompt_dict["instruction"]
+            print(f"\n[{i+1}/{len(optimize_prompts)}] Optimizing: {prompt[:60]}...")
+
+            suffix, loss, history = attack.optimize_suffix(prompt)
+
+            optimization_results.append({
+                "prompt": prompt,
+                "suffix": suffix,
+                "loss": loss,
+                "category": prompt_dict.get("category", "unknown"),
+            })
+            print(f"  Loss: {loss:.4f}")
+            print(f"  Suffix: {suffix[:60]}...")
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        # Save optimization results
+        with open(os.path.join(output_dir, "optimization_results.json"), "w") as f:
+            json.dump(optimization_results, f, indent=2)
+
+        # Clean up GCG model to free memory
+        del model, tokenizer, attack
         gc.collect()
         torch.cuda.empty_cache()
-
-    # Save optimization results
-    with open(os.path.join(output_dir, "optimization_results.json"), "w") as f:
-        json.dump(optimization_results, f, indent=2)
 
     # Select suffix based on strategy
     if args.suffix_strategy == "best":
@@ -284,11 +312,6 @@ def main():
                              "source_prompt": r["prompt"]}
                            for r in optimization_results]
         print(f"\nUsing all {len(selected_suffixes)} suffixes")
-
-    # Clean up GCG model to free memory
-    del model, tokenizer, attack
-    gc.collect()
-    torch.cuda.empty_cache()
 
     # =========================================================================
     # Phase 2: Load evaluation dataset and model_base
@@ -310,7 +333,7 @@ def main():
 
     # Load model using model_factory for consistent generation
     print("\nLoading model for evaluation...")
-    model_base = construct_model_base(args.model_path, args.model_alias)
+    model_base = construct_model_base(args.model_path)
 
     # =========================================================================
     # Phase 3: Generate and evaluate with each suffix
