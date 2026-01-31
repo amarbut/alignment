@@ -130,3 +130,15 @@ class UnslothOSSModelCard(ModelCard):
     def get_expert_diffs_filename(self) -> str:
         """Return filename for OSS expert diffs (same as standard OSS, same model)."""
         return "oss_expert_diffs.json"
+
+    def get_expert_steering_thresholds(self) -> dict:
+        """
+        Return thresholds for expert steering selection.
+
+        OSS models use less aggressive thresholds than Mixtral/OLMoE/DeepSeek.
+        """
+        return {
+            "kl_threshold": 1.0,
+            "steering_score_threshold": -5.0,
+            "prune_layer_percentage": 0.0
+        }

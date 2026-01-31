@@ -23,7 +23,8 @@ from pipeline.model_utils.oss_model import (
     OSSModel,
     tokenize_instructions_oss_chat,
     OSS_REFUSAL_TOKS,
-    OSS_CHAT_TEMPLATE
+    OSS_CHAT_TEMPLATE,
+    LLAMA_2_SYSTEM_PROMPT
 )
 from pipeline.model_utils.hf_cache_config import set_hf_cache
 
@@ -37,6 +38,24 @@ class UnslothOSSModel(OSSModel):
     Inherits all the chat template, tokenization, and utility functions
     from OSSModel, but uses unsloth's FastLanguageModel for loading.
     """
+
+    def __init__(self, model_path: str, system_prompt: str = None):
+        """
+        Initialize Unsloth OSS model.
+
+        Args:
+            model_path: Path or HuggingFace model ID
+            system_prompt: System prompt to use. If None, defaults to LLAMA_2_SYSTEM_PROMPT.
+                          Pass empty string "" or None with explicit override for no system prompt.
+        """
+        # Store system prompt before calling parent init
+        if system_prompt is None:
+            self._system_prompt = LLAMA_2_SYSTEM_PROMPT
+        else:
+            self._system_prompt = system_prompt if system_prompt else None
+        # Call grandparent's __init__ to avoid OSSModel.__init__ overwriting _system_prompt
+        from pipeline.model_utils.model_base import ModelBase
+        ModelBase.__init__(self, model_path)
 
     def _load_model(self, model_path, dtype=None, max_seq_length=2048):
         """

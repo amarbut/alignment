@@ -289,36 +289,47 @@ def parse_arguments():
         help='Evaluation datasets to use (default: uses config). Options: jailbreakbench, advbench, tdc2023, maliciousinstruct, strongreject, harmbench_test'
     )
 
+    parser.add_argument(
+        '--system_prompt',
+        type=str,
+        default='llama_2',
+        choices=['none', 'llama_2', 'lightweight'],
+        help='System prompt to use (default: llama_2)'
+    )
+
     return parser.parse_args()
 
 
 def load_and_sample_datasets(cfg):
-    """Load and sample datasets."""
+    """Load and sample datasets with size safety checks."""
     random.seed(42)
 
-    harmful_train = random.sample(
-        load_dataset_split(harmtype='harmful', split='train', instructions_only=True),cfg.n_train
-    )
-    harmless_train = random.sample(
-        load_dataset_split(harmtype='harmless', split='train', instructions_only=True),
-        cfg.n_train
-    )
-    harmful_val = random.sample(
-        load_dataset_split(harmtype='harmful', split='val', instructions_only=True),
-        cfg.n_val
-    )
-    harmless_val = random.sample(
-        load_dataset_split(harmtype='harmless', split='val', instructions_only=True),
-        cfg.n_val
-    )
-    harmful_test = random.sample(
-        load_dataset_split(harmtype='harmful', split='test', instructions_only=True),
-        cfg.n_val
-    )
-    harmless_test = random.sample(
-        load_dataset_split(harmtype='harmless', split='test', instructions_only=False),  # Need full format for evaluation
-        cfg.n_val
-    )
+    # Load full datasets
+    harmful_train_full = load_dataset_split(harmtype='harmful', split='train', instructions_only=True)
+    harmless_train_full = load_dataset_split(harmtype='harmless', split='train', instructions_only=True)
+    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=True)
+    harmless_val_full = load_dataset_split(harmtype='harmless', split='val', instructions_only=True)
+    harmful_test_full = load_dataset_split(harmtype='harmful', split='test', instructions_only=True)
+    harmless_test_full = load_dataset_split(harmtype='harmless', split='test', instructions_only=False)
+
+    # Sample with size checks
+    n_train_actual = min(cfg.n_train, len(harmful_train_full), len(harmless_train_full))
+    n_val_actual = min(cfg.n_val, len(harmful_val_full), len(harmless_val_full))
+    n_test_actual = min(cfg.n_test, len(harmful_test_full), len(harmless_test_full))
+
+    if n_train_actual < cfg.n_train:
+        print(f"Warning: Requested {cfg.n_train} train samples but only {n_train_actual} available")
+    if n_val_actual < cfg.n_val:
+        print(f"Warning: Requested {cfg.n_val} val samples but only {n_val_actual} available")
+    if n_test_actual < cfg.n_test:
+        print(f"Warning: Requested {cfg.n_test} test samples but only {n_test_actual} available")
+
+    harmful_train = random.sample(harmful_train_full, n_train_actual)
+    harmless_train = random.sample(harmless_train_full, n_train_actual)
+    harmful_val = random.sample(harmful_val_full, n_val_actual)
+    harmless_val = random.sample(harmless_val_full, n_val_actual)
+    harmful_test = random.sample(harmful_test_full, n_test_actual)
+    harmless_test = random.sample(harmless_test_full, n_test_actual)
 
     return (harmful_train, harmless_train, harmful_val,
             harmless_val, harmful_test, harmless_test)
@@ -631,6 +642,7 @@ def run_expert_specific_pipeline(args):
         print(f"Adapter: {args.adapter_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Expert type: {args.expert_type}")
+    print(f"System prompt: {args.system_prompt}")
     print("="*80)
 
     # Setup paths
@@ -645,7 +657,17 @@ def run_expert_specific_pipeline(args):
     if args.top_n > 1:
         model_alias += f"_top{args.top_n}"
 
-    cfg = Config(model_alias=model_alias, model_path=args.model_path)
+    # Create config with CLI args
+    cfg = Config(
+        model_alias=model_alias,
+        model_path=args.model_path,
+        n_train=args.n_train,
+        n_val=args.n_val,
+        n_test=args.n_test,
+        system_prompt=args.system_prompt,
+        coeff=args.coeff,
+        threshold=args.threshold
+    )
 
     # Override evaluation datasets if specified via CLI
     if args.eval_datasets is not None:

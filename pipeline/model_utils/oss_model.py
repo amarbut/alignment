@@ -89,6 +89,22 @@ def act_add_oss_weights(model, direction: Float[Tensor, "d_model"], coeff, layer
 
 class OSSModel(ModelBase):
 
+    def __init__(self, model_path: str, system_prompt: str = None):
+        """
+        Initialize OSS model.
+
+        Args:
+            model_path: Path or HuggingFace model ID
+            system_prompt: System prompt to use. If None, defaults to LLAMA_2_SYSTEM_PROMPT.
+                          Pass empty string "" or None with explicit override for no system prompt.
+        """
+        # Store system prompt before calling parent init (which calls _get_tokenize_instructions_fn)
+        if system_prompt is None:
+            self._system_prompt = LLAMA_2_SYSTEM_PROMPT
+        else:
+            self._system_prompt = system_prompt if system_prompt else None
+        super().__init__(model_path)
+
     def _load_model(self, model_path, dtype=torch.bfloat16):
         # Set HF cache location for OSS models
         set_hf_cache('oss')
@@ -114,7 +130,7 @@ class OSSModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=LLAMA_2_SYSTEM_PROMPT, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=self._system_prompt, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         # Extract the part after {instruction} in the template to get end-of-instruction tokens

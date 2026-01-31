@@ -215,3 +215,15 @@ class DeepSeekModelCard(ModelCard):
         to capture routing decisions (vs getting them from MLP output).
         """
         return True
+
+    def get_expert_steering_thresholds(self) -> dict:
+        """
+        Return thresholds for expert steering selection.
+
+        DeepSeek uses more permissive thresholds due to different routing dynamics.
+        """
+        return {
+            "kl_threshold": 2.0,
+            "steering_score_threshold": -20.0,
+            "prune_layer_percentage": 0.0
+        }

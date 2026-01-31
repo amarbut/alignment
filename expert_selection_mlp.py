@@ -156,9 +156,9 @@ def select_expert_direction(
     coeff,
     mu_b,
     tau,
-    kl_threshold=1.0,  # 0.1 for dense, 1.0 for OSS, 2.0 for mixtral and olmoe
-    induce_refusal_threshold=-5.0, # 0 for dense, -5 for OSS, -20 for mixtral and olmoe
-    prune_layer_percentage=0.0, # 0.2 for dense, nonsensical for expert-specific
+    kl_threshold=None,  # If None, get from model_card
+    induce_refusal_threshold=None,  # If None, get from model_card
+    prune_layer_percentage=None,  # If None, get from model_card
     batch_size=32,
     top_n=1,
     model_card: Optional["ModelCard"] = None
@@ -178,6 +178,26 @@ def select_expert_direction(
 
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
+
+    # Get thresholds from model_card if not provided
+    if model_card is not None and hasattr(model_card, 'get_expert_steering_thresholds'):
+        thresholds = model_card.get_expert_steering_thresholds()
+        if kl_threshold is None:
+            kl_threshold = thresholds.get('kl_threshold', 1.0)
+        if induce_refusal_threshold is None:
+            induce_refusal_threshold = thresholds.get('steering_score_threshold', -5.0)
+        if prune_layer_percentage is None:
+            prune_layer_percentage = thresholds.get('prune_layer_percentage', 0.0)
+        print(f"Using model-specific thresholds: kl={kl_threshold}, steering={induce_refusal_threshold}, prune={prune_layer_percentage}")
+    else:
+        # Fallback defaults (OSS-like)
+        if kl_threshold is None:
+            kl_threshold = 1.0
+        if induce_refusal_threshold is None:
+            induce_refusal_threshold = -5.0
+        if prune_layer_percentage is None:
+            prune_layer_percentage = 0.0
+        print(f"Using default thresholds: kl={kl_threshold}, steering={induce_refusal_threshold}, prune={prune_layer_percentage}")
 
     n_pos, n_candidates, d_model = candidate_directions.shape
     n_layer = model_base.model.config.num_hidden_layers
