@@ -51,7 +51,7 @@ class Config:
     prune_layer_percentage: float = 0.2
 
     # System prompt option
-    system_prompt: str = "llama_2"  # "none", "llama_2", "lightweight"
+    system_prompt: str = "lightweight"  # "none", "llama_2", "lightweight"
 
     # Intervention parameters
     coeff: float = 1.0

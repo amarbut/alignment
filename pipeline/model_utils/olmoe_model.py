@@ -44,7 +44,11 @@ def tokenize_instructions_olmoe_chat(
     """Tokenize instructions for OLMoE chat model."""
     prompts = []
     for i, instruction in enumerate(instructions):
-        messages = [{"role": "user", "content": instruction}]
+        # Build messages list, optionally with system prompt
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": instruction})
 
         # Use chat template
         formatted = tokenizer.apply_chat_template(
@@ -104,7 +108,7 @@ class OLMoEModel(ModelBase):
         return functools.partial(
             tokenize_instructions_olmoe_chat,
             tokenizer=self.tokenizer,
-            system=None,
+            system=self._system_prompt,
             include_trailing_whitespace=True
         )
 

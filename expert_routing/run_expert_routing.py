@@ -23,7 +23,7 @@ alignment_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if alignment_dir not in sys.path:
     sys.path.insert(0, alignment_dir)
 
-from pipeline.config import Config, SYSTEM_PROMPTS
+from pipeline.config import Config
 from pipeline.model_utils.model_factory_moe import construct_model_base
 from pipeline.model_utils.model_card_factory import create_model_card
 from dataset.load_dataset import load_dataset_split, load_dataset
@@ -55,23 +55,16 @@ def parse_arguments():
     parser.add_argument(
         '--system_prompt',
         type=str,
-        default='llama_2',
+        default=None,
         choices=['none', 'llama_2', 'lightweight'],
-        help='System prompt to use (default: llama_2)'
+        help='System prompt to use (default: use Config default)'
     )
     parser.add_argument(
         '--intervention',
         type=str,
-        default='select_refusal',
-        choices=[
-            'baseline',
-            'select_refusal',
-            'select_response',
-            'top_refusal',
-            'top_jailbreak',
-            'all'
-        ],
-        help='Intervention type to run'
+        default='select_experts',
+        choices=['baseline', 'select_experts', 'top_experts'],
+        help='Intervention type: select_experts (threshold-based) or top_experts (top-1 per layer). Each runs both refusal and response induction.'
     )
     parser.add_argument(
         '--threshold',
@@ -88,8 +81,8 @@ def parse_arguments():
     parser.add_argument(
         '--n_test',
         type=int,
-        default=100,
-        help='Number of test examples'
+        default=None,
+        help='Number of test examples (default: use Config default)'
     )
     parser.add_argument(
         '--regenerate_diffs',
@@ -187,7 +180,7 @@ def save_metadata(cfg, args, config: ExpertInterventionConfig, intervention_name
         "system_prompt": args.system_prompt,
         "threshold": args.threshold,
         "epsilon": args.epsilon,
-        "n_test": args.n_test,
+        "n_test": cfg.n_test,
         "num_forced_experts": force_count,
         "num_suppressed_experts": suppress_count,
         "timestamp": datetime.now().isoformat(),
@@ -255,42 +248,31 @@ def run_pipeline(args):
     print("EXPERT ROUTING INTERVENTION PIPELINE")
     print("=" * 80)
     print(f"Model: {args.model_path}")
-    print(f"System prompt: {args.system_prompt}")
     print(f"Intervention: {args.intervention}")
     print(f"Threshold: {args.threshold}")
     print(f"Epsilon: {args.epsilon}")
     print("=" * 80)
 
-    # Setup configuration
+    # Setup configuration (only override if explicitly specified)
     model_alias = os.path.basename(args.model_path) + f"/expert_routing_t{args.threshold}"
-    cfg = Config(
-        model_alias=model_alias,
-        model_path=args.model_path,
-        n_test=args.n_test,
-        system_prompt=args.system_prompt
-    )
+    config_kwargs = {
+        "model_alias": model_alias,
+        "model_path": args.model_path,
+    }
+    if args.system_prompt is not None:
+        config_kwargs["system_prompt"] = args.system_prompt
+    if args.n_test is not None:
+        config_kwargs["n_test"] = args.n_test
+    cfg = Config(**config_kwargs)
+    print(f"System prompt: {cfg.system_prompt}")
 
     print(f"\nArtifact path: {cfg.artifact_path()}")
 
-    # Load model
+    # Load model with system prompt from config
     print("\nLoading model...")
-    model_base = construct_model_base(args.model_path)
+    model_base = construct_model_base(args.model_path, system_prompt=cfg.system_prompt)
     model_base.model.config.pad_token_id = model_base.tokenizer.pad_token_id
-
-    # Update system prompt if needed
-    system_prompt_text = SYSTEM_PROMPTS.get(args.system_prompt)
-    if 'oss' in args.model_path.lower() and hasattr(model_base, '_system_prompt'):
-        model_base._system_prompt = system_prompt_text
-        import functools
-        from pipeline.model_utils.oss_model import tokenize_instructions_oss_chat
-        model_base.tokenize_instructions_fn = functools.partial(
-            tokenize_instructions_oss_chat,
-            tokenizer=model_base.tokenizer,
-            system=system_prompt_text,
-            include_trailing_whitespace=True
-        )
-
-    print("Model loaded!")
+    print(f"Model loaded with system prompt: {cfg.system_prompt}")
 
     # Create model card
     model_card = create_model_card(model_base)
@@ -318,58 +300,39 @@ def run_pipeline(args):
     harmful_datasets = {}
     for dataset_name in cfg.evaluation_datasets:
         dataset = load_dataset(dataset_name)
-        if args.n_test is not None:
-            dataset = random.sample(dataset, min(args.n_test, len(dataset)))
+        dataset = random.sample(dataset, min(cfg.n_test, len(dataset)))
         harmful_datasets[dataset_name] = dataset
 
     harmless_test = load_dataset_split(harmtype='harmless', split='test')
-    if args.n_test is not None:
-        harmless_test = random.sample(harmless_test, min(args.n_test, len(harmless_test)))
+    harmless_test = random.sample(harmless_test, min(cfg.n_test, len(harmless_test)))
 
     print(f"Loaded {len(harmful_datasets)} harmful datasets and harmless test set")
 
     # Build intervention configs
     configs_to_run = {}
 
-    if args.intervention == 'all':
-        if not args.skip_baseline:
-            configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
-        configs_to_run['select_refusal'] = get_select_experts_refusal_induction_config(
-            expert_diffs, args.threshold, args.epsilon
-        )
-        configs_to_run['select_response'] = get_select_experts_response_induction_config(
-            expert_diffs, args.threshold, args.epsilon
-        )
-        configs_to_run['top_refusal'] = get_top_experts_refusal_config(
-            expert_diffs, model_card, args.epsilon
-        )
-        configs_to_run['top_jailbreak'] = get_top_experts_jailbreak_config(
-            expert_diffs, model_card, args.epsilon
-        )
-    elif args.intervention == 'baseline':
+    if args.intervention == 'baseline':
         configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
-    elif args.intervention == 'select_refusal':
+
+    elif args.intervention == 'select_experts':
+        # Threshold-based: runs both refusal and response induction
         if not args.skip_baseline:
             configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
         configs_to_run['select_refusal'] = get_select_experts_refusal_induction_config(
             expert_diffs, args.threshold, args.epsilon
         )
-    elif args.intervention == 'select_response':
-        if not args.skip_baseline:
-            configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
         configs_to_run['select_response'] = get_select_experts_response_induction_config(
             expert_diffs, args.threshold, args.epsilon
         )
-    elif args.intervention == 'top_refusal':
+
+    elif args.intervention == 'top_experts':
+        # Top-1 per layer: runs both refusal and response induction
         if not args.skip_baseline:
             configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
         configs_to_run['top_refusal'] = get_top_experts_refusal_config(
             expert_diffs, model_card, args.epsilon
         )
-    elif args.intervention == 'top_jailbreak':
-        if not args.skip_baseline:
-            configs_to_run['baseline'] = ExpertInterventionConfig(epsilon=args.epsilon)
-        configs_to_run['top_jailbreak'] = get_top_experts_jailbreak_config(
+        configs_to_run['top_response'] = get_top_experts_jailbreak_config(
             expert_diffs, model_card, args.epsilon
         )
 
@@ -391,8 +354,8 @@ def run_pipeline(args):
     print(f"\nResults saved to: {cfg.artifact_path()}/completions/")
 
     print("\nIntervention effects:")
-    print("  - select_refusal/top_refusal: Should INCREASE refusal on harmful")
-    print("  - select_response/top_jailbreak: Should DECREASE refusal on harmful")
+    print("  - *_refusal: Should INCREASE refusal on harmful prompts")
+    print("  - *_response: Should DECREASE refusal on harmful prompts (more compliance)")
 
 
 if __name__ == "__main__":

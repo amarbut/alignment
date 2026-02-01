@@ -42,9 +42,9 @@ def parse_arguments():
     parser.add_argument(
         '--system_prompt',
         type=str,
-        default="llama_2",
+        default=None,
         choices=["none", "llama_2", "lightweight"],
-        help='System prompt to use (default: llama_2)'
+        help='System prompt to use (default: use Config default)'
     )
     parser.add_argument(
         '--coeff',
@@ -70,20 +70,20 @@ def parse_arguments():
     parser.add_argument(
         '--n_train',
         type=int,
-        default=128,
-        help='Number of training samples'
+        default=None,
+        help='Number of training samples (default: use Config default)'
     )
     parser.add_argument(
         '--n_val',
         type=int,
-        default=32,
-        help='Number of validation samples'
+        default=None,
+        help='Number of validation samples (default: use Config default)'
     )
     parser.add_argument(
         '--n_test',
         type=int,
-        default=100,
-        help='Number of test samples'
+        default=None,
+        help='Number of test samples (default: use Config default)'
     )
     return parser.parse_args()
 
@@ -275,41 +275,32 @@ def run_pipeline(args):
     print("ARDITI REFUSAL DIRECTION PIPELINE")
     print("=" * 80)
     print(f"Model: {args.model_path}")
-    print(f"System prompt: {args.system_prompt}")
     print(f"Coefficient: {args.coeff}")
     print("=" * 80)
 
-    # Setup configuration
+    # Setup configuration (only override if explicitly specified)
     model_alias = os.path.basename(args.model_path) + "/arditi"
-    cfg = Config(
-        model_alias=model_alias,
-        model_path=args.model_path,
-        n_train=args.n_train,
-        n_val=args.n_val,
-        n_test=args.n_test,
-        system_prompt=args.system_prompt,
-        coeff=args.coeff
-    )
+    config_kwargs = {
+        "model_alias": model_alias,
+        "model_path": args.model_path,
+        "coeff": args.coeff,
+    }
+    if args.system_prompt is not None:
+        config_kwargs["system_prompt"] = args.system_prompt
+    if args.n_train is not None:
+        config_kwargs["n_train"] = args.n_train
+    if args.n_val is not None:
+        config_kwargs["n_val"] = args.n_val
+    if args.n_test is not None:
+        config_kwargs["n_test"] = args.n_test
+    cfg = Config(**config_kwargs)
+    print(f"System prompt: {cfg.system_prompt}")
 
-    # Get the actual system prompt text
-    system_prompt_text = SYSTEM_PROMPTS.get(args.system_prompt)
-
-    # Load model with system prompt
+    # Load model with system prompt from config
     print("\nLoading model...")
-    model_base = construct_model_base(cfg.model_path)
-    # For OSS models, update the tokenize function if we need a different system prompt
-    if 'oss' in cfg.model_path.lower() and hasattr(model_base, '_system_prompt'):
-        model_base._system_prompt = system_prompt_text
-        import functools
-        from pipeline.model_utils.oss_model import tokenize_instructions_oss_chat
-        model_base.tokenize_instructions_fn = functools.partial(
-            tokenize_instructions_oss_chat,
-            tokenizer=model_base.tokenizer,
-            system=system_prompt_text,
-            include_trailing_whitespace=True
-        )
+    model_base = construct_model_base(cfg.model_path, system_prompt=cfg.system_prompt)
     model_base.model.config.pad_token_id = model_base.tokenizer.pad_token_id
-    print("Model loaded!")
+    print(f"Model loaded with system prompt: {cfg.system_prompt}")
 
     # Load and sample datasets
     print("\nLoading datasets...")

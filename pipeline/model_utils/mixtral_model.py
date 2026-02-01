@@ -112,7 +112,7 @@ class MixtralModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_mixtral_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_mixtral_chat, tokenizer=self.tokenizer, system=self._system_prompt, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         return self.tokenizer.encode("</s>", add_special_tokens=False)

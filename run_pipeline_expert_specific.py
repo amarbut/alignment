@@ -28,30 +28,34 @@ import argparse
 from pathlib import Path
 
 from dataset.load_dataset import load_dataset_split, load_dataset
-from pipeline.config import Config
-from pipeline.model_utils.model_factory import construct_model_base
+from pipeline.config import Config, SYSTEM_PROMPTS
+from pipeline.model_utils.model_factory_moe import construct_model_base
 from pipeline.submodules.select_direction import get_refusal_scores
 from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from expert_selection import get_candidate_experts
 from expert_specific_activations import get_expert_mean_diff
 from expert_intervention import get_expert_weighted_intervention_hooks
-from expert_selection_mlp import select_expert_direction
+from select_direction_moe import select_expert_direction
 
 
 
 
-def load_model_with_optional_adapter(model_path, adapter_path=None):
+def load_model_with_optional_adapter(model_path, adapter_path=None, system_prompt=None):
     """
     Load model with optional LoRA adapter.
 
     Args:
         model_path: Base model path
         adapter_path: Optional path to LoRA adapter
+        system_prompt: System prompt option ("none", "llama_2", "lightweight") or text
 
     Returns:
         model_base: ModelBase object (OSSModel or wrapper)
     """
+    # Resolve system prompt option to text
+    system_prompt_text = SYSTEM_PROMPTS.get(system_prompt, system_prompt)
+
     if adapter_path is not None:
         if not UNSLOTH_AVAILABLE:
             raise ImportError("unsloth and peft are required for adapter loading. Please install them.")
@@ -90,10 +94,11 @@ def load_model_with_optional_adapter(model_path, adapter_path=None):
         # Set end-of-instruction tokens (for plotting)
         model_base.eoi_toks = [tokenizer.encode("<|end|>", add_special_tokens=False)]
 
-        # Set tokenization function
+        # Set tokenization function with system prompt
         from pipeline.model_utils.oss_model import tokenize_instructions_oss_chat
+        model_base._system_prompt = system_prompt_text
         model_base.tokenize_instructions_fn = lambda instructions, **kwargs: tokenize_instructions_oss_chat(
-            tokenizer, instructions, **kwargs
+            tokenizer, instructions, system=system_prompt_text, **kwargs
         )
 
         # Set generation function
@@ -169,8 +174,8 @@ def load_model_with_optional_adapter(model_path, adapter_path=None):
 
         return model_base
     else:
-        # Standard loading
-        return construct_model_base(model_path)
+        # Standard loading with system prompt
+        return construct_model_base(model_path, system_prompt=system_prompt)
 
 
 def parse_arguments():
@@ -235,22 +240,22 @@ def parse_arguments():
     parser.add_argument(
         '--n_train',
         type=int,
-        default=500,
-        help='Number of training samples'
+        default=None,
+        help='Number of training samples (default: use Config default)'
     )
 
     parser.add_argument(
         '--n_val',
         type=int,
-        default=100,
-        help='Number of validation samples'
+        default=None,
+        help='Number of validation samples (default: use Config default)'
     )
 
     parser.add_argument(
         '--n_test',
         type=int,
-        default=100,
-        help='Number of test samples'
+        default=None,
+        help='Number of test samples (default: use Config default)'
     )
 
     parser.add_argument(
@@ -292,9 +297,9 @@ def parse_arguments():
     parser.add_argument(
         '--system_prompt',
         type=str,
-        default='llama_2',
+        default=None,
         choices=['none', 'llama_2', 'lightweight'],
-        help='System prompt to use (default: llama_2)'
+        help='System prompt to use (default: use Config default)'
     )
 
     return parser.parse_args()
@@ -642,7 +647,6 @@ def run_expert_specific_pipeline(args):
         print(f"Adapter: {args.adapter_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Expert type: {args.expert_type}")
-    print(f"System prompt: {args.system_prompt}")
     print("="*80)
 
     # Setup paths
@@ -657,17 +661,23 @@ def run_expert_specific_pipeline(args):
     if args.top_n > 1:
         model_alias += f"_top{args.top_n}"
 
-    # Create config with CLI args
-    cfg = Config(
-        model_alias=model_alias,
-        model_path=args.model_path,
-        n_train=args.n_train,
-        n_val=args.n_val,
-        n_test=args.n_test,
-        system_prompt=args.system_prompt,
-        coeff=args.coeff,
-        threshold=args.threshold
-    )
+    # Create config with CLI args (only override if explicitly specified)
+    config_kwargs = {
+        "model_alias": model_alias,
+        "model_path": args.model_path,
+        "coeff": args.coeff,
+        "threshold": args.threshold,
+    }
+    if args.system_prompt is not None:
+        config_kwargs["system_prompt"] = args.system_prompt
+    if args.n_train is not None:
+        config_kwargs["n_train"] = args.n_train
+    if args.n_val is not None:
+        config_kwargs["n_val"] = args.n_val
+    if args.n_test is not None:
+        config_kwargs["n_test"] = args.n_test
+    cfg = Config(**config_kwargs)
+    print(f"System prompt: {cfg.system_prompt}")
 
     # Override evaluation datasets if specified via CLI
     if args.eval_datasets is not None:
@@ -689,7 +699,7 @@ def run_expert_specific_pipeline(args):
     print("\n" + "="*80)
     print("LOADING MODEL")
     print("="*80)
-    model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path)
+    model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path, system_prompt=cfg.system_prompt)
 
     # Create model card for MoE-specific operations
     from pipeline.model_utils.model_card_factory import create_model_card

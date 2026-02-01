@@ -35,7 +35,11 @@ def format_instruction_deepseek_chat(
 ):
     """Format instruction for DeepSeek chat model."""
     # DeepSeek uses a simple User/Assistant format
-    formatted = f"User: {instruction}\n\nAssistant:"
+    # Prepend system prompt if provided
+    if system:
+        formatted = f"System: {system}\n\nUser: {instruction}\n\nAssistant:"
+    else:
+        formatted = f"User: {instruction}\n\nAssistant:"
 
     if include_trailing_whitespace:
         formatted += " "
@@ -120,7 +124,7 @@ class DeepSeekModel(ModelBase):
         return functools.partial(
             tokenize_instructions_deepseek_chat,
             tokenizer=self.tokenizer,
-            system=None,
+            system=self._system_prompt,
             include_trailing_whitespace=True
         )
 
