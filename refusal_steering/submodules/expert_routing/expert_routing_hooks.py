@@ -19,7 +19,7 @@ import os
 from typing import Dict, Tuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pipeline.model_utils.model_card import ModelCard
+    from model_utils.model_card import ModelCard
 
 
 def load_expert_diffs(model_card: "ModelCard", base_path: str = "expert_explore") -> dict:

@@ -19,13 +19,13 @@ from datetime import datetime
 
 from dataset.load_dataset import load_dataset_split, load_dataset
 
-from pipeline.config import Config, SYSTEM_PROMPTS
-from pipeline.model_utils.model_factory_moe import construct_model_base
-from pipeline.utils.hook_utils import get_activation_addition_subspace_input_pre_hook
+from config import Config, SYSTEM_PROMPTS
+from model_utils.model_factory_moe import construct_model_base
+from submodules.arditi.hook_utils import get_activation_addition_subspace_input_pre_hook
 
-from pipeline.submodules.generate_directions import generate_directions
-from pipeline.submodules.select_direction import select_direction, get_refusal_scores
-from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
+from submodules.arditi.generate_directions import generate_directions
+from submodules.arditi.select_direction import select_direction, get_refusal_scores
+from submodules.evaluate_jailbreak import evaluate_jailbreak
 
 
 def parse_arguments():

@@ -13,8 +13,8 @@ use model_factory.py instead.
 """
 
 from typing import Optional
-from pipeline.model_utils.model_base import ModelBase
-from pipeline.config import SYSTEM_PROMPTS
+from model_utils.model_base import ModelBase
+from config import SYSTEM_PROMPTS
 
 
 def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -> ModelBase:
@@ -44,22 +44,22 @@ def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -
     if 'oss' in model_path_lower:
         # Check if it's an unsloth model
         if 'unsloth' in model_path_lower:
-            from pipeline.model_utils.oss_unsloth_model import UnslothOSSModel
+            from model_utils.oss_unsloth_model import UnslothOSSModel
             return UnslothOSSModel(model_path, system_prompt=system_prompt_text)
         else:
-            from pipeline.model_utils.oss_model import OSSModel
+            from model_utils.oss_model import OSSModel
             return OSSModel(model_path, system_prompt=system_prompt_text)
 
     elif 'mixtral' in model_path_lower:
-        from pipeline.model_utils.mixtral_model import MixtralModel
+        from model_utils.mixtral_model import MixtralModel
         return MixtralModel(model_path, system_prompt=system_prompt_text)
 
     elif 'deepseek' in model_path_lower:
-        from pipeline.model_utils.deepseek_model import DeepSeekModel
+        from model_utils.deepseek_model import DeepSeekModel
         return DeepSeekModel(model_path, system_prompt=system_prompt_text)
 
     elif 'olmoe' in model_path_lower:
-        from pipeline.model_utils.olmoe_model import OLMoEModel
+        from model_utils.olmoe_model import OLMoEModel
         return OLMoEModel(model_path, system_prompt=system_prompt_text)
 
     else:

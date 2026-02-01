@@ -11,24 +11,19 @@ Based on expert_explore/run_paired_interventions_v4.py but cleaner.
 """
 
 import os
-import sys
 import json
 import random
 import argparse
 from datetime import datetime
 from typing import Dict
 
-# Add the alignment directory to path
-alignment_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if alignment_dir not in sys.path:
-    sys.path.insert(0, alignment_dir)
-
-from pipeline.config import Config
-from pipeline.model_utils.model_factory_moe import construct_model_base
-from pipeline.model_utils.model_card_factory import create_model_card
+from config import Config
+from model_utils.model_factory_moe import construct_model_base
+from model_utils.model_card_factory import create_model_card
 from dataset.load_dataset import load_dataset_split, load_dataset
 
-from expert_routing.expert_routing_hooks import (
+from submodules.expert_diff_generator import generate_expert_diffs_for_model
+from submodules.expert_routing.expert_routing_hooks import (
     ExpertInterventionConfig,
     apply_expert_interventions,
     remove_expert_interventions,
@@ -97,7 +92,7 @@ def parse_arguments():
     parser.add_argument(
         '--expert_diffs_path',
         type=str,
-        default='expert_explore',
+        default='expert_diffs',
         help='Directory containing expert diffs files'
     )
     return parser.parse_args()
@@ -146,7 +141,7 @@ def evaluate_and_save_results(
     eval_methodologies
 ):
     """Evaluate completions and save results."""
-    from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
+    from submodules.evaluate_jailbreak import evaluate_jailbreak
 
     completions_dir = os.path.join(cfg.artifact_path(), 'completions', intervention_label)
     completions_path = os.path.join(completions_dir, f'{dataset_name}_completions.json')
@@ -279,15 +274,22 @@ def run_pipeline(args):
     print(f"Model card: {type(model_card).__name__}")
     print(f"Number of layers: {model_card.get_num_layers()}")
 
-    # Load expert diffs
+    # Load or generate expert diffs
     expert_diffs_file = os.path.join(args.expert_diffs_path, model_card.get_expert_diffs_filename())
 
     if args.regenerate_diffs or not os.path.exists(expert_diffs_file):
         print(f"\nExpert diffs not found or regeneration requested...")
-        print(f"Expected at: {expert_diffs_file}")
-        print("Please generate expert diffs first using the appropriate script.")
-        print("For OSS models: python expert_explore/compute_expert_diffs.py")
-        return
+        print(f"Generating expert diffs for {args.model_path}...")
+        generate_expert_diffs_for_model(
+            model_base=model_base,
+            model_card=model_card,
+            harmful_dataset_path="dataset/splits/harmful_train.json",
+            harmless_dataset_path="dataset/splits/harmless_train.json",
+            output_path=expert_diffs_file,
+            batch_size=4,
+            last_n_tokens=5
+        )
+        print(f"Expert diffs saved to: {expert_diffs_file}")
 
     print(f"\nLoading expert diffs from: {expert_diffs_file}")
     expert_diffs = load_expert_diffs(model_card, args.expert_diffs_path)
