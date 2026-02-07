@@ -215,8 +215,6 @@ def generate_and_save_completions(cfg, model_base, fwd_pre_hooks, fwd_hooks, int
         max_new_tokens=cfg.max_new_tokens
     )
 
-    print("\n\n".join(json.dumps(c, indent=2) for c in completions[:3]))
-
     output_path = os.path.join(output_dir, f'{dataset_name}_{intervention_label}_completions.json')
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(completions, f, indent=4, ensure_ascii=False)
