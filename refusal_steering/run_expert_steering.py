@@ -1015,15 +1015,6 @@ def run_expert_specific_pipeline(args):
     print("="*80)
     print(f"Results saved to: {output_dir}")
 
-    if args.top_n == 1:
-        print(f"\nSelected expert-specific direction:")
-        print(f"  Layer: {layer}")
-        print(f"  Expert: {expert_id}")
-        print(f"  Position: {pos}")
-    else:
-        print(f"\nSelected top {args.top_n} expert-specific directions:")
-        for i, (pos, layer, expert_id, _) in enumerate(selected_directions):
-            print(f"  [{i+1}] Layer: {layer}, Expert: {expert_id}, Position: {pos}")
 
 
 if __name__ == "__main__":
