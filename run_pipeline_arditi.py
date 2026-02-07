@@ -1,14 +1,17 @@
 """
-Clean Arditi Refusal Direction Pipeline
-
-This is a simplified version of run_pipeline_subspace.py that:
-- Only supports the Arditi mean-difference method
-- Only implements ActAdd intervention (no ablation)
-- Uses enhanced Config with system prompt support
-- Saves metadata.json with all hyperparameters
-
-For the full pipeline with cpca/ica methods and ablation, use run_pipeline_subspace.py
+Simplified Arditi Refusal Direction Pipeline
+    - Activation-addition only
+    - Modified refusal score
+    - Addition of OpenAI Judge
+    - No native coherence testing
 """
+try:
+    from unsloth import FastLanguageModel
+    from peft import PeftModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    UNSLOTH_AVAILABLE = False
+
 
 import torch
 import random

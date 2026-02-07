@@ -1,13 +1,7 @@
 """
 Expert Routing Intervention Pipeline
-
-Clean implementation of expert routing interventions that:
-- Uses ModelCard abstraction for model-specific operations
-- Dynamically loads expert diffs from model-specific files
-- Supports system prompt configuration
-- Saves comprehensive metadata for reproducibility
-
-Based on expert_explore/run_paired_interventions_v4.py but cleaner.
+    - Identifies refusal/response experts from activation diffs
+    - Forces or suppresses experts at inference to induce refusal/response
 """
 
 import os
@@ -354,10 +348,6 @@ def run_pipeline(args):
     print("PIPELINE COMPLETE!")
     print("=" * 80)
     print(f"\nResults saved to: {cfg.artifact_path()}/completions/")
-
-    print("\nIntervention effects:")
-    print("  - *_refusal: Should INCREASE refusal on harmful prompts")
-    print("  - *_response: Should DECREASE refusal on harmful prompts (more compliance)")
 
 
 if __name__ == "__main__":
