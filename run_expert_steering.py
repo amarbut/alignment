@@ -208,7 +208,7 @@ def parse_arguments():
     parser.add_argument(
         '--expert_type',
         type=str,
-        default='harmful_preferred',
+        default='both',
         choices=['harmful_preferred', 'harmless_preferred', 'both'],
         help='Which type of experts to select'
     )
@@ -275,7 +275,7 @@ def parse_arguments():
     parser.add_argument(
         '--max_new_tokens',
         type=int,
-        default=256,
+        default=100,
         help='Maximum new tokens for generation'
     )
 
@@ -646,6 +646,7 @@ def run_expert_specific_pipeline(args):
     if args.adapter_path:
         print(f"Adapter: {args.adapter_path}")
     print(f"Expert threshold: {args.threshold}%")
+    print(f"Coefficient: {args.coeff}")
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
@@ -653,9 +654,9 @@ def run_expert_specific_pipeline(args):
     if args.adapter_path:
         # Use adapter name in alias
         adapter_name = Path(args.adapter_path).parent.name + "_" + Path(args.adapter_path).name
-        model_alias = f"expert_specific_t{args.threshold}_{adapter_name}"
+        model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}_{adapter_name}"
     else:
-        model_alias = f"expert_specific_t{args.threshold}"
+        model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}"
 
     # Add top_n to alias if not default
     if args.top_n > 1:
@@ -685,7 +686,7 @@ def run_expert_specific_pipeline(args):
         print(f"Using custom evaluation datasets: {cfg.evaluation_datasets}")
 
     # Create output directory
-    base_output_dir = os.path.join(cfg.artifact_path(), f"threshold_{args.threshold}")
+    base_output_dir = os.path.join(cfg.artifact_path(), f"coeff_{args.coeff}")
 
     # If skip_select and top_n > 1, use subdirectory for this specific top_n evaluation
     if args.skip_select and args.top_n > 1:
@@ -737,12 +738,12 @@ def run_expert_specific_pipeline(args):
 
     # Get model-specific expert diffs path
     expert_diffs_filename = model_card.get_expert_diffs_filename()
-    expert_diffs_path = f"expert_explore/{expert_diffs_filename}"
+    expert_diffs_path = f"expert_diffs/{expert_diffs_filename}"
 
     # Generate expert diffs if they don't exist
     if not os.path.exists(expert_diffs_path):
         print(f"Expert diffs not found at {expert_diffs_path}, generating...")
-        os.makedirs("expert_explore", exist_ok=True)
+        os.makedirs("expert_diffs", exist_ok=True)
         model_card.generate_expert_diffs(
             harmful_dataset_path="dataset/splits/harmful_train.json",
             harmless_dataset_path="dataset/splits/harmless_train.json",
