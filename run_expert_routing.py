@@ -10,6 +10,22 @@ Clean implementation of expert routing interventions that:
 Based on expert_explore/run_paired_interventions_v4.py but cleaner.
 """
 
+# =============================================================================
+# CRITICAL: Set HF cache BEFORE importing any HuggingFace libraries
+# HF libraries cache environment variables at import time, so this must happen first
+# =============================================================================
+import argparse as _argparse_early
+
+# Minimal early arg parsing just to get model_path for cache config
+_early_parser = _argparse_early.ArgumentParser(add_help=False)
+_early_parser.add_argument('--model_path', type=str, default='')
+_early_args, _ = _early_parser.parse_known_args()
+
+if _early_args.model_path:
+    from model_utils.hf_cache_config import set_hf_cache_from_path
+    set_hf_cache_from_path(_early_args.model_path)
+# =============================================================================
+
 import os
 import json
 import random
