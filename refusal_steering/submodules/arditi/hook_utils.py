@@ -38,95 +38,9 @@ def add_hooks(
         for h in handles:
             h.remove()
 
-def get_direction_ablation_input_pre_hook(direction: Tensor):
-    def hook_fn(module, input):
-        nonlocal direction
-
-        if isinstance(input, tuple):
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input[0]
-        else:
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input
-
-        direction = direction / (direction.norm(dim=-1, keepdim=True) + 1e-8)
-        direction = direction.to(activation) 
-        activation -= (activation @ direction).unsqueeze(-1) * direction 
-
-        if isinstance(input, tuple):
-            return (activation, *input[1:])
-        else:
-            return activation
-    return hook_fn
-
-def get_direction_ablation_output_hook(direction: Tensor):
-    def hook_fn(module, input, output):
-        nonlocal direction
-
-        if isinstance(output, tuple):
-            activation: Float[Tensor, "batch_size seq_len d_model"] = output[0]
-        else:
-            activation: Float[Tensor, "batch_size seq_len d_model"] = output
-
-        direction = direction / (direction.norm(dim=-1, keepdim=True) + 1e-8)
-        direction = direction.to(activation)
-        activation -= (activation @ direction).unsqueeze(-1) * direction 
-
-        if isinstance(output, tuple):
-            return (activation, *output[1:])
-        else:
-            return activation
-
-    return hook_fn
-
-def get_all_direction_ablation_hooks(
-    model_base,
-    direction: Float[Tensor, 'd_model'],
-):
-    fwd_pre_hooks = [(model_base.model_block_modules[layer], get_direction_ablation_input_pre_hook(direction=direction)) for layer in range(model_base.model.config.num_hidden_layers)]
-    fwd_hooks = [(model_base.model_attn_modules[layer], get_direction_ablation_output_hook(direction=direction)) for layer in range(model_base.model.config.num_hidden_layers)]
-    fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=direction)) for layer in range(model_base.model.config.num_hidden_layers)]
-
-    return fwd_pre_hooks, fwd_hooks
-
-def get_directional_patching_input_pre_hook(direction: Float[Tensor, "d_model"], coeff: Float[Tensor, ""]):
-    def hook_fn(module, input):
-        nonlocal direction
-
-        if isinstance(input, tuple):
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input[0]
-        else:
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input
-
-        direction = direction / (direction.norm(dim=-1, keepdim=True) + 1e-8)
-        direction = direction.to(activation) 
-        activation -= (activation @ direction).unsqueeze(-1) * direction 
-        activation += coeff * direction
-
-        if isinstance(input, tuple):
-            return (activation, *input[1:])
-        else:
-            return activation
-    return hook_fn
-
-def get_activation_addition_input_pre_hook(vector: Float[Tensor, "d_model"], coeff: Float[Tensor, ""]):
-    def hook_fn(module, input):
-        nonlocal vector
-
-        if isinstance(input, tuple):
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input[0]
-        else:
-            activation: Float[Tensor, "batch_size seq_len d_model"] = input
-
-        vector = vector.to(activation)
-        activation += coeff * vector
-
-        if isinstance(input, tuple):
-            return (activation, *input[1:])
-        else:
-            return activation
-    return hook_fn
 
 # ------------------------------
-# subspace utils
+# Subspace utilities
 # ------------------------------
 
 def _prep_basis(
@@ -141,15 +55,16 @@ def _prep_basis(
       - Orthonormalize columns (QR), so projection is (X @ U) @ U^T, or
       - Normalize columns and later use exact projector with (U^T U)^-1.
     """
-    U = basis.to(device=like.device, dtype=torch.float32) #downgrade dtype for math function
+    U = basis.to(device=like.device, dtype=torch.float32)  # downgrade dtype for math function
     if orthonormalize:
         # torch.linalg.qr is fast & numerically stable; columns of Q are orthonormal
         Q, _ = torch.linalg.qr(U, mode="reduced")
-        return Q.to(dtype=like.dtype) #cast back to the original dtype
+        return Q.to(dtype=like.dtype)  # cast back to the original dtype
     else:
         # Just prevent degenerate columns; exact projector will handle non-orthonormality
         U = U / (U.norm(dim=0, keepdim=True) + eps)
         return U.to(dtype=like.dtype)
+
 
 def _project_onto_subspace(
     X: Float[Tensor, "... d_model"],
@@ -168,12 +83,13 @@ def _project_onto_subspace(
     if orthonormal:
         # (..., d) @ (d, k) -> (..., k) ; (..., k) @ (k, d) -> (..., d)
         proj = (X @ U) @ U.transpose(-1, -2)
-        return proj.to(dtype = Xdt)
+        return proj.to(dtype=Xdt)
     else:
         gram = U.transpose(-1, -2) @ U                          # (k, k)
         gram_inv = torch.linalg.pinv(gram)                      # (k, k)
         proj = ((X @ U) @ gram_inv) @ U.transpose(-1, -2)       # (..., d)
-        return proj.to(dtype = Xdt)
+        return proj.to(dtype=Xdt)
+
 
 def _coerce_coeff(
     coeff: Optional[Tensor],
@@ -197,41 +113,41 @@ def _coerce_coeff(
     c = coeff.to(X)
     # expand dims so that it can broadcast to X.shape[:-1] + (k,)
     if c.dim() == 0:
-        return c.view(1, 1, 1).expand(1,1,k)  # scalar
+        return c.view(1, 1, 1).expand(1, 1, k)  # scalar
     if c.dim() == 1:
         if c.shape[-1] == k:  # (k,)
             return c.view(1, 1, k)
-        elif c.shape[-1] == 1:          # (1,)
-            return c.view(1, 1, 1).expand(1,1,k)
+        elif c.shape[-1] == 1:  # (1,)
+            return c.view(1, 1, 1).expand(1, 1, k)
     # Otherwise assume it's already broadcastable like (B, S, k)
     if c.shape[-1] != k:
         raise ValueError(f"coeff last dim {c.shape[-1]} != k={k}")
     return c
 
 
-# ---------------------------------------------
-# SUBSPACE HOOKS #
-# ---------------------------------------------
+# ------------------------------
+# Subspace hooks (used for direction selection)
+# ------------------------------
 
 def get_subspace_ablation_input_pre_hook(
     basis: Float[Tensor, "d_model k"],
     mu_b: Float[Tensor, "d_model"],
-    tau : float,
+    tau: float,
     *,
     orthonormalize: bool = True
 ):
     """
     Remove the projection of activations onto span(basis) at module input.
+    Used during direction selection to evaluate candidate directions.
     """
     def hook_fn(module, input):
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
-        mu = mu_b.to(device=activation.device, dtype=activation.dtype).view(1, 1, -1)
-        centered = activation - mu
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
         activation = activation - (tau * proj)
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
     return hook_fn
+
 
 def get_subspace_ablation_output_hook(
     basis: Float[Tensor, "d_model k"],
@@ -242,47 +158,20 @@ def get_subspace_ablation_output_hook(
 ):
     """
     Remove the projection of activations onto span(basis) at module output.
+    Used during direction selection to evaluate candidate directions.
     """
     def hook_fn(module, input, output):
         activation: Float[Tensor, "batch seq d"] = output[0] if isinstance(output, tuple) else output
         U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
-        mu = mu_b.to(device=activation.device, dtype=activation.dtype).view(1, 1, -1)
-        centered = activation - mu
         proj = _project_onto_subspace(activation, U, orthonormal=orthonormalize)
-        # if torch.rand(()) < 0.005:
-        #     print("Removed mean L2 prop:", proj.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
         activation = activation - (tau * proj)
         return (activation, *output[1:]) if isinstance(output, tuple) else activation
     return hook_fn
 
-def get_all_subspace_ablation_hooks(
-    model_base,
-    basis: Float[Tensor, "d_model k"],
-    mu_b: Float[Tensor, "d_model"],
-    tau : float,
-    *,
-    orthonormalize: bool = True
-):
-    """
-    Register subspace ablation on every block input and both attn/mlp outputs
-    (mirrors your single-vector behavior).
-    """
-    fwd_pre_hooks = [
-        (model_base.model_block_modules[layer],
-         get_subspace_ablation_input_pre_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
-        for layer in range(model_base.model.config.num_hidden_layers)
-    ]
-    fwd_hooks = [
-        (model_base.model_attn_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
-        for layer in range(model_base.model.config.num_hidden_layers)
-    ]
-    fwd_hooks += [
-        (model_base.model_mlp_modules[layer],
-         get_subspace_ablation_output_hook(basis=basis, orthonormalize=orthonormalize, mu_b=mu_b, tau=tau))
-        for layer in range(model_base.model.config.num_hidden_layers)
-    ]
-    return fwd_pre_hooks, fwd_hooks
+
+# ------------------------------
+# ActAdd hook (used for intervention)
+# ------------------------------
 
 def get_activation_addition_subspace_input_pre_hook(
     basis: Float[Tensor, "d_model k"],
@@ -292,15 +181,13 @@ def get_activation_addition_subspace_input_pre_hook(
 ):
     """
     Pure addition along span(basis): X := X + (coeff @ U^T)
+    This is the main intervention hook used for ActAdd.
     """
     def hook_fn(module, input):
         activation: Float[Tensor, "batch seq d"] = input[0] if isinstance(input, tuple) else input
-        #U = _prep_basis(basis, like=activation, orthonormalize=orthonormalize)
         U = basis.to(device=activation.device, dtype=activation.dtype)
         c = _coerce_coeff(coeff, X=activation, U=U)
         delta = c @ U.transpose(-1, -2)    # (B,S,d)
-        # if torch.rand(()) < 0.005:
-        #     print("Δ mean L2 prop per token:", delta.norm(dim=-1).mean().item()/activation.norm(dim=-1).mean().item())
         activation = activation + delta
         return (activation, *input[1:]) if isinstance(input, tuple) else activation
     return hook_fn

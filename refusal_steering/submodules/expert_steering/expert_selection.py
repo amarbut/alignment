@@ -129,17 +129,3 @@ def get_candidate_experts(
     print_expert_selection_summary(selected)
 
     return selected
-
-
-if __name__ == "__main__":
-    # Test with different thresholds
-    print("\nTesting with 15% threshold:")
-    experts_15 = get_candidate_experts(threshold=15.0, expert_type="harmful_preferred")
-
-    print("\n" + "="*80)
-    print("\nTesting with 10% threshold:")
-    experts_10 = get_candidate_experts(threshold=10.0, expert_type="harmful_preferred")
-
-    print("\n" + "="*80)
-    print("\nTesting with both types at 15%:")
-    experts_both = get_candidate_experts(threshold=15.0, expert_type="both")

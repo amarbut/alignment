@@ -274,23 +274,3 @@ def get_expert_mean_diff(
     print(f"  Mean diff magnitude: {mean_diff.norm(dim=-1).mean().item():.4f}")
 
     return mean_diff
-
-
-# === Backward Compatibility Functions ===
-# These maintain the old API while using model cards internally
-
-def get_model_layers(model_base):
-    """
-    DEPRECATED: Use model_card.layers instead.
-
-    This function is kept for backward compatibility.
-    """
-    from model_utils.model_card_factory import create_model_card
-    model_card = create_model_card(model_base)
-    return model_card.layers
-
-
-if __name__ == "__main__":
-    # Quick test
-    print("Testing expert-specific activation extraction...")
-    print("This module should be used via run_pipeline_expert_specific.py")

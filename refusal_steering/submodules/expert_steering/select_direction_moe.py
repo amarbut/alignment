@@ -12,12 +12,10 @@ test at the same location.
 
 import json
 import torch
-import functools
-import math
 import matplotlib.pyplot as plt
 import os
 
-from typing import List, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 from jaxtyping import Float
 from torch import Tensor
 from tqdm import tqdm
@@ -26,124 +24,17 @@ from model_utils.model_base import ModelBase
 
 if TYPE_CHECKING:
     from model_utils.model_card import ModelCard
-from submodules.arditi.hook_utils import add_hooks
+
 from submodules.arditi.select_direction import (
-    refusal_score,
     get_refusal_scores,
     get_last_position_logits,
     plot_refusal_scores,
     filter_fn,
-    kl_div_fn
+    kl_div_fn,
 )
-from expert_intervention import (
+from submodules.expert_steering.expert_intervention import (
     get_expert_weighted_activation_addition_hook,
-    get_expert_weighted_ablation_hook
 )
-
-
-def get_model_layers(model_base):
-    """
-    Navigate model structure to get layers, handling PEFT wrapping.
-
-    Supports:
-    - Standard: model.model.layers
-    - PEFT: model.base_model.model.layers or model.model.model.layers
-    """
-    if hasattr(model_base, 'model'):
-        current = model_base.model
-
-        # Navigate through PEFT/wrapper layers
-        while hasattr(current, 'model') or hasattr(current, 'base_model'):
-            if hasattr(current, 'base_model'):
-                current = current.base_model
-            elif hasattr(current, 'model'):
-                current = current.model
-            else:
-                break
-
-            if hasattr(current, 'layers'):
-                return current.layers
-
-        if hasattr(current, 'layers'):
-            return current.layers
-
-    raise AttributeError(f"Could not find model layers in {type(model_base)}")
-
-
-def get_mlp_activation_addition_hook(
-    direction: Float[Tensor, "d_model"],
-    coeff: float = 1.0
-):
-    """
-    Hook that adds a direction to MLP output (not block input).
-
-    This is different from Arditi's get_activation_addition_input_pre_hook
-    which adds to block input. We add to MLP output where we extracted.
-    """
-    def hook_fn(module, input, output):
-        # MLP output is tuple: (hidden_states, router_logits)
-        if isinstance(output, tuple):
-            mlp_output, router_logits = output[0], output[1]
-        else:
-            mlp_output = output
-            router_logits = None
-
-        # Add direction to all positions
-        # direction: [d_model]
-        # mlp_output: [batch, seq, d_model]
-        modified_output = mlp_output + coeff * direction.to(mlp_output.device, mlp_output.dtype)
-
-        if router_logits is not None:
-            return (modified_output, router_logits)
-        else:
-            return modified_output
-
-    return hook_fn
-
-
-def get_mlp_subspace_ablation_hook(
-    direction: Float[Tensor, "d_model 1"],
-    mu_b: Float[Tensor, "d_model"],
-    tau: float = 1.0
-):
-    """
-    Hook that ablates a direction from MLP output.
-
-    Mirrors get_subspace_ablation_output_hook but for MLP output.
-    """
-    def hook_fn(module, input, output):
-        # MLP output is tuple: (hidden_states, router_logits)
-        if isinstance(output, tuple):
-            mlp_output, router_logits = output[0], output[1]
-        else:
-            mlp_output = output
-            router_logits = None
-
-        # Ablate direction from output
-        # direction: [d_model, 1]
-        # mlp_output: [batch, seq, d_model]
-        # mu_b: [d_model]
-
-        # Center around mu_b
-        centered = mlp_output - mu_b.to(mlp_output.device, mlp_output.dtype)
-
-        # Project onto direction and subtract
-        # centered @ direction = [batch, seq, 1]
-        projection = torch.matmul(centered, direction.to(mlp_output.device, mlp_output.dtype))
-
-        # direction.T = [1, d_model]
-        # projection @ direction.T = [batch, seq, d_model]
-        ablated = centered - tau * projection * direction.squeeze(-1).to(mlp_output.device, mlp_output.dtype)
-
-        # Add back mu_b
-        modified_output = ablated + mu_b.to(mlp_output.device, mlp_output.dtype)
-
-        if router_logits is not None:
-            return (modified_output, router_logits)
-        else:
-            return modified_output
-
-    return hook_fn
 
 
 def select_expert_direction(
@@ -366,7 +257,7 @@ def select_expert_direction(
         for candidate_idx in range(n_candidates):
             layer, expert = candidate_mapping[candidate_idx]
 
-            refusal_score = ablation_refusal_scores[source_pos, candidate_idx].item()
+            refusal_score_val = ablation_refusal_scores[source_pos, candidate_idx].item()
             steering_score = steering_refusal_scores[source_pos, candidate_idx].item()
             kl_div_score = ablation_kl_div_scores[source_pos, candidate_idx].item()
 
@@ -375,17 +266,17 @@ def select_expert_direction(
                 'candidate_idx': candidate_idx,
                 'layer': layer,
                 'expert': expert,
-                'refusal_score': refusal_score,
+                'refusal_score': refusal_score_val,
                 'steering_score': steering_score,
                 'kl_div_score': kl_div_score
             })
 
             # Sort by negative refusal score (lower is better)
-            sorting_score = -refusal_score
+            sorting_score = -refusal_score_val
 
             # Filter using candidate_idx as "layer" for filter_fn
             discard_direction = filter_fn(
-                refusal_score=refusal_score,
+                refusal_score=refusal_score_val,
                 steering_score=steering_score,
                 kl_div_score=kl_div_score,
                 layer=candidate_idx,  # Use candidate_idx instead of layer
@@ -405,7 +296,7 @@ def select_expert_direction(
                 'candidate_idx': candidate_idx,
                 'layer': layer,
                 'expert': expert,
-                'refusal_score': refusal_score,
+                'refusal_score': refusal_score_val,
                 'steering_score': steering_score,
                 'kl_div_score': kl_div_score
             })
