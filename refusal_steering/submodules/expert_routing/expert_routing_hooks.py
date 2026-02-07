@@ -26,6 +26,10 @@ def load_expert_diffs(model_card: "ModelCard", base_path: str = "expert_explore"
     """
     Load expert diffs for the model.
 
+    Handles both formats:
+    - Direct format: {"0": [...], "1": [...], ...}
+    - Metadata format: {"model_path": ..., "expert_diffs": {"0": [...], ...}}
+
     Args:
         model_card: ModelCard instance to get filename from
         base_path: Directory containing expert diffs files
@@ -41,7 +45,40 @@ def load_expert_diffs(model_card: "ModelCard", base_path: str = "expert_explore"
         return {}
 
     with open(filepath, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+
+    # Handle metadata format
+    if 'expert_diffs' in data:
+        return data['expert_diffs']
+
+    return data
+
+
+def _parse_layer_key(layer_str: str) -> int:
+    """
+    Parse layer key from expert_diffs dict.
+
+    Handles both formats:
+    - "layer_0", "layer_1", etc.
+    - "0", "1", etc.
+    """
+    if layer_str.startswith('layer_'):
+        return int(layer_str.replace('layer_', ''))
+    return int(layer_str)
+
+
+def _get_layer_key(layer: int, expert_diffs: dict) -> Optional[str]:
+    """
+    Get the key for a layer from expert_diffs dict.
+
+    Handles both "layer_X" and "X" formats.
+    """
+    # Try both formats
+    if f"layer_{layer}" in expert_diffs:
+        return f"layer_{layer}"
+    if str(layer) in expert_diffs:
+        return str(layer)
+    return None
 
 
 class ExpertInterventionConfig:
@@ -280,7 +317,7 @@ def get_select_experts_refusal_induction_config(
     config = ExpertInterventionConfig(epsilon=epsilon, use_calibration=True)
 
     for layer_str, experts in expert_diffs.items():
-        layer = int(layer_str)
+        layer = _parse_layer_key(layer_str)
         for exp in experts:
             expert_id, diff_pct = exp[0], exp[1]
             if abs(diff_pct) > threshold:
@@ -314,7 +351,7 @@ def get_select_experts_response_induction_config(
     config = ExpertInterventionConfig(epsilon=epsilon, use_calibration=True)
 
     for layer_str, experts in expert_diffs.items():
-        layer = int(layer_str)
+        layer = _parse_layer_key(layer_str)
         for exp in experts:
             expert_id, diff_pct = exp[0], exp[1]
             if abs(diff_pct) > threshold:
@@ -350,11 +387,11 @@ def get_top_experts_refusal_config(
     n_layers = model_card.get_num_layers()
 
     for layer in range(n_layers):
-        layer_str = str(layer)
-        if layer_str not in expert_diffs:
+        layer_key = _get_layer_key(layer, expert_diffs)
+        if layer_key is None:
             continue
 
-        experts = expert_diffs[layer_str]
+        experts = expert_diffs[layer_key]
         if not experts:
             continue
 
@@ -397,11 +434,11 @@ def get_top_experts_jailbreak_config(
     n_layers = model_card.get_num_layers()
 
     for layer in range(n_layers):
-        layer_str = str(layer)
-        if layer_str not in expert_diffs:
+        layer_key = _get_layer_key(layer, expert_diffs)
+        if layer_key is None:
             continue
 
-        experts = expert_diffs[layer_str]
+        experts = expert_diffs[layer_key]
         if not experts:
             continue
 
