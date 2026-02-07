@@ -16,6 +16,9 @@ from typing import Optional
 from model_utils.model_base import ModelBase
 from config import SYSTEM_PROMPTS
 
+# Import cache config early - this module has no HF dependencies
+from model_utils.hf_cache_config import set_hf_cache_from_path
+
 
 def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -> ModelBase:
     """
@@ -32,6 +35,10 @@ def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -
     Raises:
         ValueError: If model is not a supported MoE model
     """
+    # IMPORTANT: Set HF cache BEFORE importing any model modules
+    # HuggingFace libraries cache env vars at import time, so this must happen first
+    set_hf_cache_from_path(model_path)
+
     # Resolve system prompt option to actual text
     if system_prompt in SYSTEM_PROMPTS:
         system_prompt_text = SYSTEM_PROMPTS[system_prompt]
