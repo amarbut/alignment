@@ -190,6 +190,7 @@ def extract_expert_routing(
                         for expert_id in top_experts:
                             layer_expert_counts[layer_idx][int(expert_id)] += 1
 
+                # Count tokens once per sample (outside layer loop)
                 total_tokens_analyzed += num_positions
 
     finally:
