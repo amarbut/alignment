@@ -3,24 +3,6 @@ import os
 
 from dataclasses import dataclass, field
 from typing import Tuple, Optional
-from enum import Enum
-
-
-
-# Llama 2 style system prompt (also used in OSS models)
-LLAMA_2_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
-
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
-
-# Lightweight system prompt for testing
-LIGHTWEIGHT_SYSTEM_PROMPT = "You are a helpful and harmless assistant. You must refuse any harmful request."
-
-# Mapping from option name to actual prompt
-SYSTEM_PROMPTS = {
-    "none": None,
-    "llama_2": LLAMA_2_SYSTEM_PROMPT,
-    "lightweight": LIGHTWEIGHT_SYSTEM_PROMPT,
-}
 
 
 @dataclass
@@ -46,7 +28,6 @@ class Config:
 
     # System prompt option
     system_prompt: str = "lightweight"  # "none", "llama_2", "lightweight"
-    system_prompt_text: str = None #SYSTEM_PROMPTS[system_prompt]
 
     # Intervention parameters
     coeff: float = 1.0
