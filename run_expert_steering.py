@@ -519,7 +519,7 @@ def run_expert_specific_pipeline(args):
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
-    model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}"
+    model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}/sys_prompt_{args.system_prompt}"
 
     # Add top_n to alias if not default
     if args.top_n > 1:
