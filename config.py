@@ -6,12 +6,6 @@ from typing import Tuple, Optional
 from enum import Enum
 
 
-class SystemPromptOption(Enum):
-    """Available system prompt options."""
-    NONE = "none"
-    LLAMA_2 = "llama_2"
-    LIGHTWEIGHT = "lightweight"
-
 
 # Llama 2 style system prompt (also used in OSS models)
 LLAMA_2_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
@@ -52,6 +46,7 @@ class Config:
 
     # System prompt option
     system_prompt: str = "lightweight"  # "none", "llama_2", "lightweight"
+    system_prompt_text: str = SYSTEM_PROMPT[system_prompt]
 
     # Intervention parameters
     coeff: float = 1.0
@@ -72,6 +67,3 @@ class Config:
         ]
         return os.path.join(*parts)
 
-    def get_system_prompt(self) -> Optional[str]:
-        """Get the actual system prompt text based on the system_prompt option."""
-        return SYSTEM_PROMPTS.get(self.system_prompt, SYSTEM_PROMPTS["llama_2"])

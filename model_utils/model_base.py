@@ -11,7 +11,7 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful and harmless assistant. You must refu
 
 
 class ModelBase(ABC):
-    def __init__(self, model_name_or_path: str, system_prompt: str = None):
+    def __init__(self, model_name_or_path: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT):
         """
         Initialize model base.
 
@@ -23,13 +23,7 @@ class ModelBase(ABC):
                           - str: Use this specific system prompt text
         """
         self.model_name_or_path = model_name_or_path
-        # Default to lightweight system prompt if not specified
-        if system_prompt is None:
-            self._system_prompt = DEFAULT_SYSTEM_PROMPT
-        elif system_prompt == "":
-            self._system_prompt = None  # Explicit disable
-        else:
-            self._system_prompt = system_prompt
+        self._system_prompt = system_prompt
         self.model: AutoModelForCausalLM = self._load_model(model_name_or_path)
         self.tokenizer: AutoTokenizer = self._load_tokenizer(model_name_or_path)
 
