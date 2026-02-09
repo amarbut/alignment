@@ -46,7 +46,7 @@ class Config:
 
     # System prompt option
     system_prompt: str = "lightweight"  # "none", "llama_2", "lightweight"
-    system_prompt_text: str = SYSTEM_PROMPTS[system_prompt]
+    system_prompt_text: str = None #SYSTEM_PROMPTS[system_prompt]
 
     # Intervention parameters
     coeff: float = 1.0
