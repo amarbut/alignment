@@ -11,7 +11,7 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful and harmless assistant. You must refu
 
 
 class ModelBase(ABC):
-    def __init__(self, model_name_or_path: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT):
+    def __init__(self, model_name_or_path: str, system_prompt: str = None):
         """
         Initialize model base.
 
