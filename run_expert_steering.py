@@ -563,7 +563,7 @@ def run_expert_specific_pipeline(args):
     print("\n" + "="*80)
     print("LOADING MODEL")
     print("="*80)
-    model_base = construct_model_base(args.model_path, system_prompt=cfg.system_prompt_text)
+    model_base = construct_model_base(args.model_path, system_prompt= None) #cfg.system_prompt_text)
 
     # Create model card for MoE-specific operations
     from model_utils.model_card_factory import create_model_card
