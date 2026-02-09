@@ -29,7 +29,7 @@ if _early_args.model_path:
     set_hf_cache_from_path(_early_args.model_path)
 # =============================================================================
 
-# Import for LoRA adapter support
+
 try:
     from unsloth import FastLanguageModel
     from peft import PeftModel
@@ -45,7 +45,7 @@ import argparse
 from pathlib import Path
 
 from dataset.load_dataset import load_dataset_split, load_dataset
-from config import Config, SYSTEM_PROMPTS
+from config import Config
 from model_utils.model_factory_moe import construct_model_base
 from submodules.arditi.select_direction import get_refusal_scores
 from submodules.evaluate_jailbreak import evaluate_jailbreak
@@ -54,145 +54,6 @@ from submodules.expert_steering.expert_selection import get_candidate_experts
 from submodules.expert_steering.expert_specific_activations import get_expert_mean_diff
 from submodules.expert_steering.expert_intervention import get_expert_weighted_intervention_hooks
 from submodules.expert_steering.select_direction_moe import select_expert_direction
-
-
-
-
-def load_model_with_optional_adapter(model_path, adapter_path=None, system_prompt=None):
-    """
-    Load model with optional LoRA adapter.
-
-    Args:
-        model_path: Base model path
-        adapter_path: Optional path to LoRA adapter
-        system_prompt: System prompt option ("none", "llama_2", "lightweight") or text
-
-    Returns:
-        model_base: ModelBase object (OSSModel or wrapper)
-    """
-    # Resolve system prompt option to text
-    system_prompt_text = SYSTEM_PROMPTS.get(system_prompt, system_prompt)
-
-    if adapter_path is not None:
-        if not UNSLOTH_AVAILABLE:
-            raise ImportError("unsloth and peft are required for adapter loading. Please install them.")
-
-        print(f"Loading base model: {model_path}")
-        print(f"Loading adapter from: {adapter_path}")
-
-        # Load with unsloth
-        base_model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_path,
-            max_seq_length=512,
-            dtype=None,
-            load_in_4bit=True,
-        )
-
-        # Load PEFT adapter
-        model = PeftModel.from_pretrained(base_model, adapter_path)
-        print("✓ Loaded model with LoRA adapter")
-
-        # Wrap in OSSModel-like interface
-        from model_utils.oss_model import OSSModel
-        model_base = OSSModel.__new__(OSSModel)
-        model_base.model = model
-        model_base.tokenizer = tokenizer
-
-        # Set up tokenizer
-        tokenizer.padding_side = "left"
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        # Set refusal tokens
-        from model_utils.oss_model import OSS_REFUSAL_TOKS
-        model_base.refusal_toks = OSS_REFUSAL_TOKS
-        model_base.refusal_score_suffix_toks = None
-
-        # Set end-of-instruction tokens (for plotting)
-        model_base.eoi_toks = [tokenizer.encode("<|end|>", add_special_tokens=False)]
-
-        # Set tokenization function with system prompt
-        from model_utils.oss_model import tokenize_instructions_oss_chat
-        model_base._system_prompt = system_prompt_text
-        model_base.tokenize_instructions_fn = lambda instructions, **kwargs: tokenize_instructions_oss_chat(
-            tokenizer, instructions, system=system_prompt_text, **kwargs
-        )
-
-        # Set generation function
-        def generate_completions(dataset, fwd_pre_hooks=None, fwd_hooks=None, max_new_tokens=256, batch_size=8):
-            """Generate completions for a dataset with optional hooks.
-
-            Args:
-                dataset: List of dicts with 'instruction' and 'category' keys
-                fwd_pre_hooks: List of (module, hook_fn) tuples for forward pre-hooks
-                fwd_hooks: List of (module, hook_fn) tuples for forward hooks
-                max_new_tokens: Maximum tokens to generate
-                batch_size: Batch size for generation
-
-            Returns:
-                List of dicts with 'prompt', 'response', and 'category' keys
-            """
-            completions = []
-
-            # Extract instructions and categories from dataset
-            instructions = [x['instruction'] for x in dataset]
-            categories = [x['category'] for x in dataset]
-
-            # Register hooks
-            hook_handles = []
-            if fwd_pre_hooks:
-                for module, hook in fwd_pre_hooks:
-                    handle = module.register_forward_pre_hook(hook)
-                    hook_handles.append(handle)
-            if fwd_hooks:
-                for module, hook in fwd_hooks:
-                    handle = module.register_forward_hook(hook)
-                    hook_handles.append(handle)
-
-            try:
-                for i in range(0, len(instructions), batch_size):
-                    batch_instructions = instructions[i:i+batch_size]
-                    batch_categories = categories[i:i+batch_size]
-
-                    tokenized = model_base.tokenize_instructions_fn(
-                        batch_instructions,
-                        include_trailing_whitespace=True
-                    )
-                    input_ids = tokenized['input_ids'].to(model.device)
-                    attention_mask = tokenized['attention_mask'].to(model.device)
-
-                    with torch.no_grad():
-                        outputs = model.generate(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            max_new_tokens=max_new_tokens,
-                            do_sample=False,
-                            pad_token_id=tokenizer.pad_token_id,
-                            eos_token_id=tokenizer.eos_token_id,
-                        )
-
-                    for j, output in enumerate(outputs):
-                        prompt_length = input_ids[j].shape[0]
-                        completion_ids = output[prompt_length:]
-                        completion = tokenizer.decode(completion_ids, skip_special_tokens=True)
-
-                        completions.append({
-                            "prompt": batch_instructions[j],
-                            "response": completion,
-                            "category": batch_categories[j]
-                        })
-            finally:
-                for handle in hook_handles:
-                    handle.remove()
-
-            return completions
-
-        model_base.generate_completions = generate_completions
-
-        return model_base
-    else:
-        # Standard loading with system prompt
-        return construct_model_base(model_path, system_prompt=system_prompt)
 
 
 def parse_arguments():
@@ -206,13 +67,6 @@ def parse_arguments():
         type=str,
         default='unsloth/gpt-oss-20b-unsloth-bnb-4bit',
         help='Path to the base model'
-    )
-
-    parser.add_argument(
-        '--adapter_path',
-        type=str,
-        default=None,
-        help='Path to LoRA adapter checkpoint (optional, for fine-tuned models)'
     )
 
     parser.add_argument(
@@ -660,20 +514,12 @@ def run_expert_specific_pipeline(args):
     print("EXPERT-SPECIFIC REFUSAL VECTOR PIPELINE")
     print("="*80)
     print(f"Model: {args.model_path}")
-    if args.adapter_path:
-        print(f"Adapter: {args.adapter_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Coefficient: {args.coeff}")
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
-    # Setup paths
-    if args.adapter_path:
-        # Use adapter name in alias
-        adapter_name = Path(args.adapter_path).parent.name + "_" + Path(args.adapter_path).name
-        model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}_{adapter_name}"
-    else:
-        model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}"
+    model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}"
 
     # Add top_n to alias if not default
     if args.top_n > 1:
@@ -713,11 +559,11 @@ def run_expert_specific_pipeline(args):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load model (with optional adapter)
+    # Load model 
     print("\n" + "="*80)
     print("LOADING MODEL")
     print("="*80)
-    model_base = load_model_with_optional_adapter(args.model_path, args.adapter_path, system_prompt=cfg.system_prompt)
+    model_base = construct_model_base(args.model_path, system_prompt=cfg.system_prompt_text)
 
     # Create model card for MoE-specific operations
     from model_utils.model_card_factory import create_model_card

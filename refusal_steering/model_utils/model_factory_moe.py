@@ -14,7 +14,6 @@ use model_factory.py instead.
 
 from typing import Optional
 from model_utils.model_base import ModelBase
-from config import SYSTEM_PROMPTS
 
 # Import cache config early - this module has no HF dependencies
 from model_utils.hf_cache_config import set_hf_cache_from_path
@@ -39,39 +38,31 @@ def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -
     # HuggingFace libraries cache env vars at import time, so this must happen first
     set_hf_cache_from_path(model_path)
 
-    # Resolve system prompt option to actual text
-    if system_prompt in SYSTEM_PROMPTS:
-        system_prompt_text = SYSTEM_PROMPTS[system_prompt]
-    else:
-        # Assume it's already the actual prompt text (or None)
-        system_prompt_text = system_prompt
-
     model_path_lower = model_path.lower()
 
     if 'oss' in model_path_lower:
         # Check if it's an unsloth model
         if 'unsloth' in model_path_lower:
             from model_utils.oss_unsloth_model import UnslothOSSModel
-            return UnslothOSSModel(model_path, system_prompt=system_prompt_text)
+            return UnslothOSSModel(model_path, system_prompt=system_prompt)
         else:
             from model_utils.oss_model import OSSModel
-            return OSSModel(model_path, system_prompt=system_prompt_text)
+            return OSSModel(model_path, system_prompt=system_prompt)
 
     elif 'mixtral' in model_path_lower:
         from model_utils.mixtral_model import MixtralModel
-        return MixtralModel(model_path, system_prompt=system_prompt_text)
+        return MixtralModel(model_path, system_prompt=system_prompt)
 
     elif 'deepseek' in model_path_lower:
         from model_utils.deepseek_model import DeepSeekModel
-        return DeepSeekModel(model_path, system_prompt=system_prompt_text)
+        return DeepSeekModel(model_path, system_prompt=system_prompt)
 
     elif 'olmoe' in model_path_lower:
         from model_utils.olmoe_model import OLMoEModel
-        return OLMoEModel(model_path, system_prompt=system_prompt_text)
+        return OLMoEModel(model_path, system_prompt=system_prompt)
 
     else:
         raise ValueError(
             f"Unknown or unsupported MoE model: {model_path}\n"
             f"Supported models: oss, unsloth/oss, mixtral, deepseek, olmoe\n"
-            f"For dense models (llama, gemma, qwen, yi), use model_factory.py instead."
         )
