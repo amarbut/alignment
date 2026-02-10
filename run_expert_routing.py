@@ -259,7 +259,8 @@ def run_pipeline(args):
     print("=" * 80)
 
     # Setup configuration (only override if explicitly specified)
-    model_alias = os.path.basename(args.model_path) + f"/expert_routing_t{args.threshold}"
+    sys = args.system_prompt if args.system_prompt is not None else "lightweight"
+    model_alias = os.path.basename(args.model_path) + f"/expert_routing_t{args.threshold}" + f"/sys_prompt_{sys}"
     config_kwargs = {
         "model_alias": model_alias,
         "model_path": args.model_path,
