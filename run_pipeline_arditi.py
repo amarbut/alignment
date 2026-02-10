@@ -38,7 +38,7 @@ from datetime import datetime
 
 from dataset.load_dataset import load_dataset_split, load_dataset
 
-from config import Config, SYSTEM_PROMPTS
+from config import Config
 from model_utils.model_factory_moe import construct_model_base
 from submodules.arditi.hook_utils import get_activation_addition_subspace_input_pre_hook
 
