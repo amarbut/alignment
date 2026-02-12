@@ -1,7 +1,7 @@
 """
-Model Card for unsloth/gpt-oss-20b-unsloth-bnb-4bit.
+Model Card for unsloth/gpt-oss-20b-unsloth-bnb-4bit. and 120b
 
-This card handles the Unsloth/PEFT wrapped version of GPT-OSS-20B,
+This card handles the Unsloth/PEFT wrapped version of GPT-OSS-20B,120B
 which has different layer navigation and router access patterns.
 """
 
@@ -40,8 +40,11 @@ class UnslothOSSModelCard(ModelCard):
         raise AttributeError(f"Could not find layers in unsloth model: {type(self.model)}")
 
     def get_num_experts(self, layer_idx: int) -> int:
-        """OSS has 32 experts per layer."""
-        return 32
+        """OSS-20B has 32 experts per layer. OSS-120B has 128 experts per layer"""
+        if '120b' in self.model_base.model_name_or_path.lower:
+            return 128
+        else:
+            return 32
 
     def get_num_layers(self) -> int:
         """Return total number of transformer layers."""
