@@ -5,13 +5,6 @@ Simplified Arditi Refusal Direction Pipeline
     - Addition of OpenAI Judge
     - No native coherence testing
 """
-try:
-    from unsloth import FastLanguageModel
-    from peft import PeftModel
-    UNSLOTH_AVAILABLE = True
-except ImportError:
-    UNSLOTH_AVAILABLE = False
-
 
 # =============================================================================
 # CRITICAL: Set HF cache BEFORE importing any HuggingFace libraries
@@ -28,6 +21,14 @@ if _early_args.model_path:
     from model_utils.hf_cache_config import set_hf_cache_from_path
     set_hf_cache_from_path(_early_args.model_path)
 # =============================================================================
+
+# Import for LoRA adapter support (AFTER cache setup)
+try:
+    from unsloth import FastLanguageModel
+    from peft import PeftModel
+    UNSLOTH_AVAILABLE = True
+except ImportError:
+    UNSLOTH_AVAILABLE = False
 
 import torch
 import random
