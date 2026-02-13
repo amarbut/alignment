@@ -19,12 +19,7 @@ from typing import List
 from torch import Tensor
 from jaxtyping import Float
 
-from model_utils.oss_model import (
-    OSSModel,
-    tokenize_instructions_oss_chat,
-    OSS_REFUSAL_TOKS,
-    OSS_CHAT_TEMPLATE,
-)
+from model_utils.oss_model import OSSModel
 from model_utils.hf_cache_config import set_hf_cache
 
 

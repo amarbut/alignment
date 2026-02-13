@@ -105,6 +105,13 @@ def parse_arguments():
         default=None,
         help='Number of test samples (default: use Config default)'
     )
+
+    parser.add_argument(
+        '--max_new_tokens',
+        type=int,
+        default=100,
+        help='Maximum new tokens for generation'
+    )
     return parser.parse_args()
 
 
@@ -312,6 +319,8 @@ def run_pipeline(args):
         config_kwargs["n_val"] = args.n_val
     if args.n_test is not None:
         config_kwargs["n_test"] = args.n_test
+    if args.max_new_tokens is not None:
+        config_kwargs["max_new_tokens"] = args.max_new_tokens
     cfg = Config(**config_kwargs)
     print(f"System prompt: {cfg.system_prompt}")
 

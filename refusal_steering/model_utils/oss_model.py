@@ -12,7 +12,7 @@ from model_utils.hf_cache_config import set_hf_cache
 from openai_harmony import load_harmony_encoding, HarmonyEncodingName, Role, Message, Conversation, DeveloperContent, SystemContent
 
 
-OSS_REFUSAL_TOKS = [40, 357, 2305, 1877, 33680, 47483]# 'I', 'As', 'Sorry'
+#OSS_REFUSAL_TOKS = [40, 357, 2305, 1877, 33680, 47483]# 'I', 'As', 'Sorry' #replaced with dynamic generation
 
 # OSS chat template with channel prefix for refusal scoring
 # Format: <|start|>developer<|message|>{system}<|end|><|start|>user<|message|>{instruction}<|end|><|start|>assistant<|channel|>final<|message|>
@@ -113,7 +113,13 @@ class OSSModel(ModelBase):
         return self.tokenizer.encode(OSS_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
     def _get_refusal_toks(self):
-        return OSS_REFUSAL_TOKS
+        refusal_starters = ['I', ' I', 'As', ' As', 'Sorry', ' Sorry']
+        toks = []
+        for starter in refusal_starters:
+            encoded = self.tokenizer.encode(starter, add_special_tokens=False)
+            if len(encoded) > 0:
+                toks.append(encoded[0])
+        return list(set(toks))  # Remove duplicates
 
     def _get_refusal_score_suffix_toks(self):
         # No longer needed - the suffix is now baked into the chat template

@@ -12,7 +12,7 @@ from model_utils.hf_cache_config import set_hf_cache
 
 
 
-MIXTRAL_REFUSAL_TOKS = [315, 19385, 1136] # 'I', 'Sorry''As'
+#MIXTRAL_REFUSAL_TOKS = [315, 19385, 1136] # 'I', 'Sorry''As' # replaced with dynamic generation
 
 def format_instruction_mixtral_chat(
     instruction: str,
@@ -102,7 +102,13 @@ class MixtralModel(ModelBase):
         return self.tokenizer.encode("</s>", add_special_tokens=False)
 
     def _get_refusal_toks(self):
-        return MIXTRAL_REFUSAL_TOKS
+        refusal_starters = ['I', ' I', 'As', ' As', 'Sorry', ' Sorry']
+        toks = []
+        for starter in refusal_starters:
+            encoded = self.tokenizer.encode(starter, add_special_tokens=False)
+            if len(encoded) > 0:
+                toks.append(encoded[0])
+        return list(set(toks))  # Remove duplicates
     
     def _get_refusal_phrases(self):
         phrases = [" I’m sorry", " I'm sorry", " I cannot", " I can't", " As an AI", "I am unable", "I don't"]
