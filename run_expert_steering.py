@@ -448,7 +448,7 @@ def generate_and_evaluate_completions(
 
     # Load dataset if not provided
     if dataset is None:
-        dataset = (dataset_name)
+        dataset = load_dataset(dataset_name)
         dataset = random.sample(dataset, min(100, len(dataset)))
 
     # Get intervention hooks - handle both single and multiple directions
