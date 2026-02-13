@@ -41,7 +41,7 @@ class UnslothOSSModelCard(ModelCard):
 
     def get_num_experts(self, layer_idx: int) -> int:
         """OSS-20B has 32 experts per layer. OSS-120B has 128 experts per layer"""
-        if '120b' in self.model_base.model_name_or_path.lower:
+        if '120b' in str(self.model_base.model_name_or_path).lower():
             return 128
         else:
             return 32
