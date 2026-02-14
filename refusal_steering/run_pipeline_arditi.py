@@ -105,6 +105,12 @@ def parse_arguments():
         default=None,
         help='Number of test samples (default: use Config default)'
     )
+    parser.add_argument(
+        '--batch_size',
+        type=int,
+        default=32,
+        help='Batch size for processing (default: 32)'
+    )
     return parser.parse_args()
 
 
@@ -141,7 +147,7 @@ def load_and_sample_datasets(cfg):
     return harmful_train, harmless_train, harmful_val, harmless_val
 
 
-def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
+def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val, batch_size=32):
     """Filter datasets based on refusal scores."""
     def filter_examples(dataset, scores, threshold, comparison):
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
@@ -150,12 +156,14 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_train_scores = get_refusal_scores(
             model_base.model, harmful_train, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmless_train_scores = get_refusal_scores(
             model_base.model, harmless_train, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
         harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
@@ -164,12 +172,14 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_val_scores = get_refusal_scores(
             model_base.model, harmful_val, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmless_val_scores = get_refusal_scores(
             model_base.model, harmless_val, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
         harmless_val = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
@@ -328,7 +338,8 @@ def run_pipeline(args):
 
     # Filter datasets
     harmful_train, harmless_train, harmful_val, harmless_val = filter_data(
-        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val
+        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val,
+        batch_size=args.batch_size
     )
     print(f"Filtered data: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
 

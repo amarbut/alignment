@@ -211,7 +211,7 @@ def load_and_sample_datasets(cfg):
             harmless_val, harmful_test, harmless_test)
 
 
-def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
+def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val, batch_size=32):
     """
     Filter datasets based on refusal scores.
 
@@ -226,12 +226,14 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_train_scores = get_refusal_scores(
             model_base.model, harmful_train, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmless_train_scores = get_refusal_scores(
             model_base.model, harmless_train, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer, 
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
 
         harmful_train_filtered = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
@@ -248,12 +250,14 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_val_scores = get_refusal_scores(
             model_base.model, harmful_val, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
         harmless_val_scores = get_refusal_scores(
             model_base.model, harmless_val, model_base.tokenize_instructions_fn,
             model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks,
+            batch_size=batch_size
         )
 
         harmful_val_filtered = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
@@ -359,7 +363,8 @@ def select_best_expert_direction(
     expert_directions,
     artifact_dir,
     model_card,
-    top_n=1
+    top_n=1,
+    batch_size=32
 ):
     """
     Select the best expert-specific direction(s) using Arditi's criteria.
@@ -398,7 +403,8 @@ def select_best_expert_direction(
         mu_b=mu_b,
         tau=1.0,
         top_n=top_n,
-        model_card=model_card
+        model_card=model_card,
+        batch_size=batch_size
     )
 
     # Handle single vs multiple directions
@@ -433,7 +439,8 @@ def generate_and_evaluate_completions(
     intervention_label,
     eval_methodologies,
     max_new_tokens=256,
-    dataset=None
+    dataset=None,
+    batch_size=8
 ):
     """Generate completions with expert-specific intervention and evaluate.
 
@@ -476,6 +483,7 @@ def generate_and_evaluate_completions(
         dataset,
         fwd_pre_hooks=fwd_pre_hooks,
         fwd_hooks=fwd_hooks,
+        batch_size=batch_size,
         max_new_tokens=max_new_tokens
     )
 
@@ -586,7 +594,8 @@ def run_expert_specific_pipeline(args):
     print("\nFiltering datasets based on refusal scores...")
     (harmful_train, harmless_train,
      harmful_val, harmless_val) = filter_data(
-        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val
+        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val,
+        batch_size=args.batch_size
     )
 
     print(f"\nFiltered data:")
@@ -656,7 +665,8 @@ def run_expert_specific_pipeline(args):
             expert_directions,
             artifact_dir=os.path.join(output_dir, "selection"),
             top_n=args.top_n,
-            model_card=model_card
+            model_card=model_card,
+            batch_size=args.batch_size
         )
 
         # Handle single vs multiple directions
@@ -809,9 +819,10 @@ def run_expert_specific_pipeline(args):
                     output_dir=output_dir,
                     intervention_label='baseline',
                     eval_methodologies=cfg.jailbreak_eval_methodologies,
-                    max_new_tokens=args.max_new_tokens
+                    max_new_tokens=args.max_new_tokens,
+                    batch_size=args.batch_size
                 )
-    
+
             # Harmless test set
             generate_and_evaluate_completions(
                 model_base,
@@ -822,7 +833,8 @@ def run_expert_specific_pipeline(args):
                 intervention_label='baseline',
                 eval_methodologies=cfg.refusal_eval_methodologies,
                 max_new_tokens=args.max_new_tokens,
-                dataset=harmless_test
+                dataset=harmless_test,
+                batch_size=args.batch_size
             )
 
         # ActAdd intervention (suppress refusal)
@@ -840,7 +852,8 @@ def run_expert_specific_pipeline(args):
                 output_dir=output_dir,
                 intervention_label='actadd',
                 eval_methodologies=cfg.jailbreak_eval_methodologies,
-                max_new_tokens=args.max_new_tokens
+                max_new_tokens=args.max_new_tokens,
+                batch_size=args.batch_size
             )
 
         # Harmless test set (with positive coeff to induce refusal)
@@ -853,7 +866,8 @@ def run_expert_specific_pipeline(args):
             intervention_label='actadd',
             eval_methodologies=cfg.refusal_eval_methodologies,
             max_new_tokens=args.max_new_tokens,
-            dataset=harmless_test
+            dataset=harmless_test,
+            batch_size=args.batch_size
         )
 
     print("\n" + "="*80)

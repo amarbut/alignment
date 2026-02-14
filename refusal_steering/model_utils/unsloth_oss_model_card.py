@@ -142,6 +142,6 @@ class UnslothOSSModelCard(ModelCard):
         """
         return {
             "kl_threshold": 1.0,
-            "steering_score_threshold": -5.0,
+            "steering_score_threshold": -20.0,
             "prune_layer_percentage": 0.0
         }

@@ -123,8 +123,8 @@ class UnslothOSSModel(OSSModel):
 
     # All other methods inherited from OSSModel:
     # - _get_tokenize_instructions_fn() - uses tokenize_instructions_oss_chat
-    # - _get_eoi_toks() - extracts from OSS_CHAT_TEMPLATE
-    # - _get_refusal_toks() - returns OSS_REFUSAL_TOKS
+    # - _get_eoi_toks() - encodes OSS_EOI_SUFFIX
+    # - _get_refusal_toks() - dynamically generated from refusal starters
     # - _get_refusal_score_suffix_toks() - returns None
     # - _get_refusal_phrases() - returns list of refusal phrases
     # - _get_orthogonalization_mod_fn() - if needed
