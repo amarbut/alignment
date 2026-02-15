@@ -14,11 +14,11 @@ from model_utils.hf_cache_config import set_hf_cache
 # Channel suffix to force the model into the 'final' response channel.
 # GPT-OSS models use channels (analysis, commentary, final) and need to be
 # directed to the final channel for refusal scoring and direct generation.
-OSS_CHANNEL_SUFFIX = "<|channel|>analysis<|message|><|end|><|start|>assistant"
+OSS_CHANNEL_SUFFIX = "<|channel|>analysis<|message|>The user doesn't want us to think<|end|><|start|>assistant<|channel|>final<|message|>"
 
 # End-of-instruction suffix (tokens between user content and model response).
 # Used for eoi_toks extraction; matches the tail of the formatted template.
-OSS_EOI_SUFFIX = "<|end|><|channel|>analysis<|message|><|end|><|start|>assistant"
+OSS_EOI_SUFFIX = "<|end|><|channel|>analysis<|message|>The user doesn't want us to think<|end|><|start|>assistant<|channel|>final<|message|>"
 
 LLAMA_2_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully
 as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
