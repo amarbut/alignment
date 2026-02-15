@@ -14,11 +14,13 @@ from model_utils.hf_cache_config import set_hf_cache
 # Channel suffix to force the model into the 'final' response channel.
 # GPT-OSS models use channels (analysis, commentary, final) and need to be
 # directed to the final channel for refusal scoring and direct generation.
-OSS_CHANNEL_SUFFIX = "<|channel|>analysis<|message|><|end|><|start|>assistant"
+OSS120B_CHANNEL_SUFFIX = "<|channel|>analysis<|message|>The user doesn't want us to think<|end|><|start|>assistant<|channel|>final<|message|>"
+OSS20B_CHANNEL_SUFFIX = "<|start|>assistant<|channel|>final<|message|>"
 
 # End-of-instruction suffix (tokens between user content and model response).
 # Used for eoi_toks extraction; matches the tail of the formatted template.
-OSS_EOI_SUFFIX = "<|end|><|channel|>analysis<|message|><|end|><|start|>assistant"
+OSS120B_EOI_SUFFIX = "<|end|><|channel|>analysis<|message|>The user doesn't want us to think<|end|><|start|>assistant<|channel|>final<|message|>"
+OSS20B_EOI_SUFFIX = "<|end|><|start|>assistant<|channel|>final<|message|>"
 
 LLAMA_2_SYSTEM_PROMPT = """You are a helpful, respectful and honest assistant. Always answer as helpfully
 as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
@@ -26,6 +28,7 @@ as possible, while being safe.  Your answers should not include any harmful, une
 If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information."""
 
 def format_instruction_oss_chat(
+    model_name_or_path: str,
     tokenizer: AutoTokenizer,
     instruction: str,
     output: str=None,
@@ -50,7 +53,10 @@ def format_instruction_oss_chat(
     )
 
     # Append assistant generation prompt with forced final channel
-    formatted_instruction += OSS_CHANNEL_SUFFIX
+    if "120b" in str(model_name_or_path).lower():
+        formatted_instruction += OSS120B_CHANNEL_SUFFIX
+    else:
+       formatted_instruction += OSS20B_CHANNEL_SUFFIX
 
     if not include_trailing_whitespace:
         formatted_instruction = formatted_instruction.rstrip()
@@ -61,6 +67,7 @@ def format_instruction_oss_chat(
     return formatted_instruction
 
 def tokenize_instructions_oss_chat(
+    model_name_or_path:str,
     tokenizer: AutoTokenizer,
     instructions: List[str],
     outputs: List[str]=None,
@@ -69,12 +76,12 @@ def tokenize_instructions_oss_chat(
 ):
     if outputs is not None:
         prompts = [
-            format_instruction_oss_chat(tokenizer=tokenizer, instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
+            format_instruction_oss_chat(model_name_or_path=model_name_or_path,tokenizer=tokenizer, instruction=instruction, output=output, system=system, include_trailing_whitespace=include_trailing_whitespace)
             for instruction, output in zip(instructions, outputs)
         ]
     else:
         prompts = [
-            format_instruction_oss_chat(tokenizer=tokenizer, instruction=instruction, system=system, include_trailing_whitespace=include_trailing_whitespace)
+            format_instruction_oss_chat(model_name_or_path=model_name_or_path,tokenizer=tokenizer, instruction=instruction, system=system, include_trailing_whitespace=include_trailing_whitespace)
             for instruction in instructions
         ]
 
@@ -122,11 +129,15 @@ class OSSModel(ModelBase):
         return tokenizer
 
     def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_oss_chat, tokenizer=self.tokenizer, system=self._system_prompt, include_trailing_whitespace=True)
+        return functools.partial(tokenize_instructions_oss_chat, model_name_or_path=self.model_name_or_path, tokenizer=self.tokenizer, system=self._system_prompt, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
         # Encode the end-of-instruction suffix (tokens between user content and model response)
-        return self.tokenizer.encode(OSS_EOI_SUFFIX, add_special_tokens=False)
+        if '120b' in str(self.model_name_or_path).lower():
+            eoi_suffix = OSS120B_EOI_SUFFIX
+        else:
+            eoi_suffix = OSS20B_EOI_SUFFIX
+        return self.tokenizer.encode(eoi_suffix, add_special_tokens=False)
 
     def _get_refusal_toks(self):
         refusal_starters = ['I', ' I', 'As', ' As', 'Sorry', ' Sorry']
