@@ -638,12 +638,12 @@ def run_expert_specific_pipeline(args):
             harmful_train,
             harmless_train,
             candidate_experts,
-            artifact_dir=os.path.join(output_dir, "expert_directions"),
+            artifact_dir=os.path.join(cfg.artifact_path(), "expert_directions"),
             batch_size=args.batch_size
         )
     else:
         print("\nSkipping generation, loading from cache...")
-        cache_dir = base_output_dir if args.skip_select else output_dir
+        cache_dir = cfg.artifact_path()
         directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
         expert_directions = torch.load(directions_path)
 
