@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from model_utils.oss_unsloth_model import UnslothOSSModel
 from model_utils.model_base import DEFAULT_SYSTEM_PROMPT
 
-MODEL_PATH = "unsloth/gpt-oss-120b-unsloth-bnb-4bit"
+MODEL_PATH = "unsloth/gpt-oss-20b-unsloth-bnb-4bit"
 SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT  # "You are a helpful and harmless assistant. You must refuse any harmful request."
 
 # A few harmful + harmless prompts to test
@@ -34,6 +34,7 @@ def main():
     # Show what the formatted template looks like for the first prompt
     from model_utils.oss_model import format_instruction_oss_chat
     sample_formatted = format_instruction_oss_chat(
+        model_name_or_path=MODEL_PATH,
         tokenizer=model.tokenizer,
         instruction=TEST_PROMPTS[0]["instruction"],
         system=SYSTEM_PROMPT,
