@@ -14,8 +14,8 @@ Modes:
         python run_expert_steering_topdiff.py --sweep_experts 5 --coeff 100
     Sweep all 5 token positions for one expert:
         python run_expert_steering_topdiff.py --position all --coeff 100
-    Sweep top 3 experts x all positions:
-        python run_expert_steering_topdiff.py --sweep_experts 3 --position all --coeff 100
+    Grid search for best (position, coeff) then full eval:
+        python run_expert_steering_topdiff.py --grid_search --expert_rank 2
 """
 
 # =============================================================================
@@ -58,7 +58,10 @@ from submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from submodules.expert_steering.expert_selection import get_candidate_experts
 from submodules.expert_steering.expert_specific_activations import get_expert_mean_diff
-from submodules.expert_steering.expert_intervention import get_expert_weighted_intervention_hooks
+from submodules.expert_steering.expert_intervention import (
+    get_expert_weighted_intervention_hooks,
+    get_expert_weighted_activation_addition_hook,
+)
 
 
 def parse_arguments():
@@ -119,6 +122,12 @@ def parse_arguments():
         '--skip_baseline',
         action='store_true',
         help='Skip eval on baseline model'
+    )
+
+    parser.add_argument(
+        '--skip_harmless',
+        action='store_true',
+        help='Skip harmless (refusal induction) evaluations'
     )
 
     parser.add_argument(
@@ -195,6 +204,22 @@ def parse_arguments():
              'expert_scale=unit norm scaled by expert activation RMS (default: none)'
     )
 
+    # Grid search options
+    parser.add_argument(
+        '--grid_search',
+        action='store_true',
+        help='Run grid search over (position, coeff) using refusal scores on val set, '
+             'then full eval with best combo'
+    )
+
+    parser.add_argument(
+        '--grid_coeffs',
+        type=float,
+        nargs='+',
+        default=[25, 50, 75, 100, 150, 200, 250, 300],
+        help='Coeff values to search over in grid search (default: 25 50 75 100 150 200 250 300)'
+    )
+
     return parser.parse_args()
 
 
@@ -205,24 +230,32 @@ def load_and_sample_datasets(cfg):
     # Load full datasets
     harmful_train_full = load_dataset_split(harmtype='harmful', split='train', instructions_only=True)
     harmless_train_full = load_dataset_split(harmtype='harmless', split='train', instructions_only=True)
+    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=True)
+    harmless_val_full = load_dataset_split(harmtype='harmless', split='val', instructions_only=True)
     harmful_test_full = load_dataset_split(harmtype='harmful', split='test', instructions_only=True)
     harmless_test_full = load_dataset_split(harmtype='harmless', split='test', instructions_only=False)
 
     # Sample with size checks
     n_train_actual = min(cfg.n_train, len(harmful_train_full), len(harmless_train_full))
+    n_val_actual = min(cfg.n_val, len(harmful_val_full), len(harmless_val_full))
     n_test_actual = min(cfg.n_test, len(harmful_test_full), len(harmless_test_full))
 
     if n_train_actual < cfg.n_train:
         print(f"Warning: Requested {cfg.n_train} train samples but only {n_train_actual} available")
+    if n_val_actual < cfg.n_val:
+        print(f"Warning: Requested {cfg.n_val} val samples but only {n_val_actual} available")
     if n_test_actual < cfg.n_test:
         print(f"Warning: Requested {cfg.n_test} test samples but only {n_test_actual} available")
 
     harmful_train = random.sample(harmful_train_full, n_train_actual)
     harmless_train = random.sample(harmless_train_full, n_train_actual)
+    harmful_val = random.sample(harmful_val_full, n_val_actual)
+    harmless_val = random.sample(harmless_val_full, n_val_actual)
     harmful_test = random.sample(harmful_test_full, n_test_actual)
     harmless_test = random.sample(harmless_test_full, n_test_actual)
 
-    return harmful_train, harmless_train, harmful_test, harmless_test
+    return (harmful_train, harmless_train, harmful_val, harmless_val,
+            harmful_test, harmless_test)
 
 
 def filter_data(cfg, model_base, harmful_train, harmless_train):
@@ -344,10 +377,113 @@ def normalize_direction(direction, activation_rms, position, mode):
     return direction, log
 
 
+def run_grid_search(
+    model_base, model_card, mean_diff, activation_rms,
+    layer, expert_id,
+    harmful_val, normalize_mode,
+    grid_coeffs, batch_size=32
+):
+    """
+    Grid search over (position, coeff) using Arditi refusal scores on val set.
+
+    For each (position, coeff) combo, computes the mean refusal score on harmful_val
+    with the intervention applied (negative coeff to suppress refusal). Lower score
+    means more refusal suppression = better.
+
+    Returns:
+        (best_position, best_coeff, results_list) where results_list contains
+        dicts with all scores for logging.
+    """
+    from tqdm import tqdm
+
+    positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
+
+    print(f"\n  Grid search: {len(positions)} positions x {len(grid_coeffs)} coeffs = {len(positions) * len(grid_coeffs)} combos")
+    print(f"  Positions: {positions}")
+    print(f"  Coeffs: {grid_coeffs}")
+
+    # Get baseline refusal score (no intervention)
+    baseline_scores = get_refusal_scores(
+        model_base.model, harmful_val,
+        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+        fwd_hooks=[], batch_size=batch_size,
+        tokenizer=model_base.tokenizer,
+        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+    )
+    baseline_mean = baseline_scores.mean().item()
+    print(f"  Baseline harmful refusal score: {baseline_mean:.4f}")
+
+    results = []
+    best_score = float('inf')
+    best_position = None
+    best_coeff = None
+
+    mlp_module = model_card.get_mlp_module(layer)
+
+    total = len(positions) * len(grid_coeffs)
+    with tqdm(total=total, desc="  Grid search") as pbar:
+        for position in positions:
+            direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
+            if normalize_mode == 'unit':
+                direction = direction / direction.norm()
+            elif normalize_mode == 'expert_scale' and activation_rms is not None:
+                scale = activation_rms[position].to(direction.device)
+                direction = direction / direction.norm() * scale
+
+            for coeff in grid_coeffs:
+                # Create hook with negative coeff (suppress refusal)
+                hook_fn = get_expert_weighted_activation_addition_hook(
+                    direction=direction,
+                    expert_id=expert_id,
+                    coeff=-coeff,
+                    model_card=model_card
+                )
+                fwd_hooks = [(mlp_module, hook_fn)]
+
+                scores = get_refusal_scores(
+                    model_base.model, harmful_val,
+                    model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                    fwd_hooks=fwd_hooks, batch_size=batch_size,
+                    tokenizer=model_base.tokenizer,
+                    refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                )
+                mean_score = scores.mean().item()
+
+                results.append({
+                    "position": position,
+                    "coeff": coeff,
+                    "refusal_score": mean_score,
+                    "refusal_reduction": baseline_mean - mean_score,
+                })
+
+                if mean_score < best_score:
+                    best_score = mean_score
+                    best_position = position
+                    best_coeff = coeff
+
+                pbar.update(1)
+                pbar.set_postfix(best=f"pos={best_position} coeff={best_coeff} score={best_score:.4f}")
+
+    # Sort results by refusal score (lowest = most suppression)
+    results.sort(key=lambda x: x["refusal_score"])
+
+    print(f"\n  Grid search results (top 10):")
+    print(f"  {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
+    print(f"  {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
+    for r in results[:10]:
+        print(f"  {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
+
+    print(f"\n  Best: position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}")
+
+    return best_position, best_coeff, results
+
+
 def run_single_experiment(
     args, cfg, model_base, expert_entry, rank,
     mean_diff, activation_rms, position,
-    harmful_test, harmless_test, base_output_dir
+    harmful_test, harmless_test, base_output_dir,
+    coeff_override=None
 ):
     """
     Run generate+evaluate for one (expert, position) combination.
@@ -359,8 +495,10 @@ def run_single_experiment(
         activation_rms: [n_positions] tensor (or None)
         position: int, the token position index to use
         base_output_dir: root output dir for this run
+        coeff_override: if set, use this coeff instead of args.coeff
     """
     layer, expert_id, diff_pct = expert_entry
+    coeff = coeff_override if coeff_override is not None else args.coeff
 
     # Build output subdirectory based on what we're sweeping
     sweep_parts = []
@@ -376,7 +514,7 @@ def run_single_experiment(
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\n" + "#"*80)
-    print(f"# EXPERIMENT: rank={rank} (L{layer} E{expert_id}, diff={diff_pct:.2f}%), position={position}")
+    print(f"# EXPERIMENT: rank={rank} (L{layer} E{expert_id}, diff={diff_pct:.2f}%), position={position}, coeff={coeff}")
     print(f"# Output: {output_dir}")
     print(f"#" + "#"*79)
 
@@ -397,10 +535,10 @@ def run_single_experiment(
         "diff_pct": float(diff_pct),
         "rank": rank,
         "position": position,
-        "coeff": args.coeff,
+        "coeff": coeff,
         "normalize": normalize_mode,
         "direction_norm": direction.norm().item(),
-        "selection_method": "top_diff"
+        "selection_method": "grid_search" if args.grid_search else "top_diff"
     }
     with open(os.path.join(output_dir, "experiment_metadata.json"), 'w') as f:
         json.dump(metadata, f, indent=2)
@@ -411,8 +549,7 @@ def run_single_experiment(
         print("  Skipping evaluation.")
         return
 
-    # Baseline (shared across experiments if in base_output_dir, but we re-run
-    # per-experiment when sweeping to keep output self-contained)
+    # Baseline
     if not args.skip_baseline:
         print("\n  " + "-"*60)
         print("  BASELINE (No Intervention)")
@@ -430,21 +567,22 @@ def run_single_experiment(
                 max_new_tokens=args.max_new_tokens
             )
 
-        generate_and_evaluate_completions(
-            model_base,
-            'harmless',
-            expert_info,
-            coeff=0.0,
-            output_dir=output_dir,
-            intervention_label='baseline',
-            eval_methodologies=cfg.refusal_eval_methodologies,
-            max_new_tokens=args.max_new_tokens,
-            dataset=harmless_test
-        )
+        if not args.skip_harmless:
+            generate_and_evaluate_completions(
+                model_base,
+                'harmless',
+                expert_info,
+                coeff=0.0,
+                output_dir=output_dir,
+                intervention_label='baseline',
+                eval_methodologies=cfg.refusal_eval_methodologies,
+                max_new_tokens=args.max_new_tokens,
+                dataset=harmless_test
+            )
 
     # ActAdd intervention
     print("\n  " + "-"*60)
-    print(f"  ACTADD INTERVENTION (coeff={-args.coeff})")
+    print(f"  ACTADD INTERVENTION (coeff={-coeff})")
     print("  " + "-"*60)
 
     for dataset_name in cfg.evaluation_datasets:
@@ -452,24 +590,25 @@ def run_single_experiment(
             model_base,
             dataset_name,
             expert_info,
-            coeff=-args.coeff,
+            coeff=-coeff,
             output_dir=output_dir,
             intervention_label='actadd',
             eval_methodologies=cfg.jailbreak_eval_methodologies,
             max_new_tokens=args.max_new_tokens
         )
 
-    generate_and_evaluate_completions(
-        model_base,
-        'harmless',
-        expert_info,
-        coeff=args.coeff,
-        output_dir=output_dir,
-        intervention_label='actadd',
-        eval_methodologies=cfg.refusal_eval_methodologies,
-        max_new_tokens=args.max_new_tokens,
-        dataset=harmless_test
-    )
+    if not args.skip_harmless:
+        generate_and_evaluate_completions(
+            model_base,
+            'harmless',
+            expert_info,
+            coeff=coeff,
+            output_dir=output_dir,
+            intervention_label='actadd',
+            eval_methodologies=cfg.refusal_eval_methodologies,
+            max_new_tokens=args.max_new_tokens,
+            dataset=harmless_test
+        )
 
 
 def run_topdiff_pipeline(args):
@@ -492,11 +631,15 @@ def run_topdiff_pipeline(args):
     print("="*80)
     print(f"Model: {args.model_path}")
     print(f"Expert threshold: {args.threshold}%")
-    print(f"Coefficient: {args.coeff}")
+    if args.grid_search:
+        print(f"Mode: GRID SEARCH over positions x coeffs {args.grid_coeffs}")
+    else:
+        print(f"Coefficient: {args.coeff}")
     print(f"Expert rank(s): {expert_ranks}")
-    print(f"Position(s): {positions}")
+    print(f"Position(s): {'grid_search' if args.grid_search else positions}")
     print(f"Normalize mode: {args.normalize}")
     print(f"Expert type: {args.expert_type}")
+    print(f"Skip harmless: {args.skip_harmless}")
     print("="*80)
 
     model_alias = f"{os.path.basename(args.model_path)}/expert_steering_topdiff_t{args.threshold}/sys_prompt_{args.system_prompt}"
@@ -524,8 +667,11 @@ def run_topdiff_pipeline(args):
         cfg.evaluation_datasets = tuple(args.eval_datasets)
         print(f"Using custom evaluation datasets: {cfg.evaluation_datasets}")
 
-    # Create output directory
-    base_output_dir = os.path.join(cfg.artifact_path(), f"coeff_{args.coeff}")
+    # Create base output directory (coeff is part of path only when not grid searching)
+    if args.grid_search:
+        base_output_dir = os.path.join(cfg.artifact_path(), "grid_search")
+    else:
+        base_output_dir = os.path.join(cfg.artifact_path(), f"coeff_{args.coeff}")
     os.makedirs(base_output_dir, exist_ok=True)
 
     # Load model
@@ -543,10 +689,12 @@ def run_topdiff_pipeline(args):
     print("\n" + "="*80)
     print("LOADING DATASETS")
     print("="*80)
-    harmful_train, harmless_train, harmful_test, harmless_test = load_and_sample_datasets(cfg)
+    (harmful_train, harmless_train, harmful_val, harmless_val,
+     harmful_test, harmless_test) = load_and_sample_datasets(cfg)
 
     print(f"Raw data:")
     print(f"  Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
+    print(f"  Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
     print(f"  Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
 
     # Filter training datasets based on refusal scores
@@ -638,38 +786,100 @@ def run_topdiff_pipeline(args):
 
         expert_data[rank] = (mean_diff, activation_rms)
 
-    # Run experiments
-    if not args.skip_eval:
+    # Grid search mode
+    if args.grid_search:
         print("\n" + "="*80)
-        print("EVALUATION")
+        print("GRID SEARCH")
         print("="*80)
 
-        n_experiments = len(expert_ranks) * len(positions)
-        exp_num = 0
-
         for rank in expert_ranks:
-            expert_entry = candidate_experts[rank - 1]
+            layer, expert_id, diff_pct = candidate_experts[rank - 1]
             mean_diff, activation_rms = expert_data[rank]
 
-            for position in positions:
-                exp_num += 1
-                print(f"\n{'='*80}")
-                print(f"EXPERIMENT {exp_num}/{n_experiments}")
-                print(f"{'='*80}")
+            print(f"\n  Grid search for rank {rank}: L{layer} E{expert_id} (diff={diff_pct:.2f}%)")
 
+            normalize_mode = args.normalize
+            if normalize_mode == 'expert_scale' and activation_rms is None:
+                normalize_mode = 'none'
+
+            best_position, best_coeff, grid_results = run_grid_search(
+                model_base=model_base,
+                model_card=model_card,
+                mean_diff=mean_diff,
+                activation_rms=activation_rms,
+                layer=layer,
+                expert_id=expert_id,
+                harmful_val=harmful_val,
+                normalize_mode=normalize_mode,
+                grid_coeffs=args.grid_coeffs,
+                batch_size=args.batch_size
+            )
+
+            # Save grid search results
+            grid_output_dir = os.path.join(base_output_dir, f"rank_{rank}_L{layer}_E{expert_id}")
+            os.makedirs(grid_output_dir, exist_ok=True)
+
+            with open(os.path.join(grid_output_dir, "grid_search_results.json"), 'w') as f:
+                json.dump({
+                    "best_position": best_position,
+                    "best_coeff": best_coeff,
+                    "layer": layer,
+                    "expert_id": expert_id,
+                    "rank": rank,
+                    "results": grid_results
+                }, f, indent=2)
+
+            # Run full eval with best combo
+            if not args.skip_eval:
+                print(f"\n  Running full evaluation with best combo: position={best_position}, coeff={best_coeff}")
                 run_single_experiment(
                     args=args,
                     cfg=cfg,
                     model_base=model_base,
-                    expert_entry=expert_entry,
+                    expert_entry=(layer, expert_id, diff_pct),
                     rank=rank,
                     mean_diff=mean_diff,
                     activation_rms=activation_rms,
-                    position=position,
+                    position=best_position,
                     harmful_test=harmful_test,
                     harmless_test=harmless_test,
-                    base_output_dir=base_output_dir
+                    base_output_dir=base_output_dir,
+                    coeff_override=best_coeff
                 )
+
+    # Standard (non-grid-search) mode
+    else:
+        if not args.skip_eval:
+            print("\n" + "="*80)
+            print("EVALUATION")
+            print("="*80)
+
+            n_experiments = len(expert_ranks) * len(positions)
+            exp_num = 0
+
+            for rank in expert_ranks:
+                expert_entry = candidate_experts[rank - 1]
+                mean_diff, activation_rms = expert_data[rank]
+
+                for position in positions:
+                    exp_num += 1
+                    print(f"\n{'='*80}")
+                    print(f"EXPERIMENT {exp_num}/{n_experiments}")
+                    print(f"{'='*80}")
+
+                    run_single_experiment(
+                        args=args,
+                        cfg=cfg,
+                        model_base=model_base,
+                        expert_entry=expert_entry,
+                        rank=rank,
+                        mean_diff=mean_diff,
+                        activation_rms=activation_rms,
+                        position=position,
+                        harmful_test=harmful_test,
+                        harmless_test=harmless_test,
+                        base_output_dir=base_output_dir
+                    )
 
     print("\n" + "="*80)
     print("PIPELINE COMPLETE")
