@@ -156,8 +156,8 @@ def select_expert_direction(
     coeff,
     mu_b,
     tau,
-    kl_threshold=1.0,  # 0.1 for dense, 1.0 for OSS, 2.0 for mixtral and olmoe
-    induce_refusal_threshold=-5.0, # 0 for dense, -5 for OSS, -20 for mixtral and olmoe
+    kl_threshold=2.0,  # 0.1 for dense, 1.0 for OSS, 2.0 for mixtral and olmoe
+    induce_refusal_threshold=-20.0, # 0 for dense, -5 for OSS, -20 for mixtral and olmoe
     prune_layer_percentage=0.0, # 0.2 for dense, nonsensical for expert-specific
     batch_size=32,
     top_n=1,
