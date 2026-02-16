@@ -173,6 +173,13 @@ def parse_arguments():
         help='System prompt to use (default: use Config default)'
     )
 
+    parser.add_argument(
+        '--normalize',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Normalize direction vectors to unit norm before applying coeff (default: True)'
+    )
+
     return parser.parse_args()
 
 
@@ -359,7 +366,8 @@ def select_best_expert_direction(
     expert_directions,
     artifact_dir,
     model_card,
-    top_n=1
+    top_n=1,
+    normalize=True
 ):
     """
     Select the best expert-specific direction(s) using Arditi's criteria.
@@ -398,7 +406,8 @@ def select_best_expert_direction(
         mu_b=mu_b,
         tau=1.0,
         top_n=top_n,
-        model_card=model_card
+        model_card=model_card,
+        normalize=normalize
     )
 
     # Handle single vs multiple directions
@@ -517,6 +526,7 @@ def run_expert_specific_pipeline(args):
     print(f"Model: {args.model_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Coefficient: {args.coeff}")
+    print(f"Normalize directions: {args.normalize}")
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
@@ -557,6 +567,9 @@ def run_expert_specific_pipeline(args):
         output_dir = os.path.join(base_output_dir, f"top_{args.top_n}_eval")
     else:
         output_dir = base_output_dir
+
+    if args.normalize:
+        output_dir = os.path.join(output_dir, "normalized")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -631,20 +644,19 @@ def run_expert_specific_pipeline(args):
         ]
         json.dump(expert_info, f, indent=2)
 
-    # Generate expert-specific directions
+    # Generate expert-specific directions (always in base_output_dir, independent of normalize)
     if not args.skip_generate:
         expert_directions = generate_expert_specific_directions(
             model_base,
             harmful_train,
             harmless_train,
             candidate_experts,
-            artifact_dir=os.path.join(output_dir, "expert_directions"),
+            artifact_dir=os.path.join(base_output_dir, "expert_directions"),
             batch_size=args.batch_size
         )
     else:
         print("\nSkipping generation, loading from cache...")
-        cache_dir = base_output_dir if args.skip_select else output_dir
-        directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
+        directions_path = os.path.join(base_output_dir, "expert_directions", "all_expert_directions.pt")
         expert_directions = torch.load(directions_path)
 
 
@@ -657,7 +669,8 @@ def run_expert_specific_pipeline(args):
             expert_directions,
             artifact_dir=os.path.join(output_dir, "selection"),
             top_n=args.top_n,
-            model_card=model_card
+            model_card=model_card,
+            normalize=args.normalize
         )
 
         # Handle single vs multiple directions
@@ -787,13 +800,22 @@ def run_expert_specific_pipeline(args):
         if args.top_n == 1:
             # Move direction to model device and dtype
             direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
+            if args.normalize:
+                orig_norm = direction.norm().item()
+                direction = direction / direction.norm()
+                print(f"  Normalized direction: original norm {orig_norm:.4f} -> unit vector")
             expert_info = (layer, expert_id, direction)
         else:
             # Move all directions to model device and dtype
-            expert_info = [
-                (layer, expert_id, direction.to(model_base.model.device, dtype=model_base.model.dtype))
-                for _, layer, expert_id, direction in selected_directions
-            ]
+            expert_info_list = []
+            for _, layer_i, expert_id_i, direction_i in selected_directions:
+                direction_i = direction_i.to(model_base.model.device, dtype=model_base.model.dtype)
+                if args.normalize:
+                    orig_norm = direction_i.norm().item()
+                    direction_i = direction_i / direction_i.norm()
+                    print(f"  Normalized direction (L{layer_i} E{expert_id_i}): original norm {orig_norm:.4f} -> unit vector")
+                expert_info_list.append((layer_i, expert_id_i, direction_i))
+            expert_info = expert_info_list
         if not args.skip_baseline:
             # Baseline (no intervention)
             print("\n" + "-"*80)
