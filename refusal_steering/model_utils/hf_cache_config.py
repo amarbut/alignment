@@ -11,11 +11,10 @@ from pathlib import Path
 
 # Cache location mappings
 CACHE_LOCATIONS = {
-    'oss': '/media/volume/align_2_stg/hf',
-    'unsloth': '/media/volume/align_2_stg/hf',
-    'deepseek': '/media/volume/align_2_stg/hf',
-    'mixtral': '/media/volume/align_3_stg/hf',
-    'olmoe': '/media/volume/align_2_stg/hf',
+    'oss': '/media/volume/align_2/hf',
+    'unsloth': '/media/volume/align_2/hf',
+    'mixtral': '/media/volume/mixtral/hf',
+    'olmoe': '/media/volume/align_2/hf',
 }
 
 # Default fallback (uses HF's default ~/.cache/huggingface)
