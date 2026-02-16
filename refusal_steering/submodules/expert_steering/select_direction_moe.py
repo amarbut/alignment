@@ -52,7 +52,8 @@ def select_expert_direction(
     prune_layer_percentage=None,  # If None, get from model_card
     batch_size=32,
     top_n=1,
-    model_card: Optional["ModelCard"] = None
+    model_card: Optional["ModelCard"] = None,
+    normalize: bool = True
 ):
     """
     Select best expert-specific direction(s) by testing at MLP output level.
@@ -133,11 +134,16 @@ def select_expert_direction(
     # Test each candidate direction
     # Use NEGATIVE actAdd instead of ablation (which breaks the model)
     # Logic: if we induce refusal (negative coeff), does it mess up logits on harmless?
+    if normalize:
+        print("Normalizing candidate directions to unit norm for selection")
+
     for source_pos in range(-n_pos, 0):
         for candidate_idx in tqdm(range(n_candidates), desc=f"Computing KL for position {source_pos}"):
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
+            if normalize:
+                direction_vec = direction_vec / direction_vec.norm()
 
             # Get MLP module for this layer
             mlp_module = model_card.get_mlp_module(layer)
@@ -174,6 +180,8 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             direction_vec = candidate_directions[source_pos, candidate_idx]
+            if normalize:
+                direction_vec = direction_vec / direction_vec.norm()
             mlp_module = model_card.get_mlp_module(layer)
 
             # Use negative actAdd (reduce refusal)
@@ -200,6 +208,8 @@ def select_expert_direction(
             layer, expert = candidate_mapping[candidate_idx]
 
             refusal_vector = candidate_directions[source_pos, candidate_idx]
+            if normalize:
+                refusal_vector = refusal_vector / refusal_vector.norm()
             mlp_module = model_card.get_mlp_module(layer)
 
             # Add direction to MLP output, weighted by expert's routing probability
