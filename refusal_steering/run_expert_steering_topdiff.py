@@ -53,7 +53,7 @@ from pathlib import Path
 from dataset.load_dataset import load_dataset_split, load_dataset
 from config import Config
 from model_utils.model_factory_moe import construct_model_base
-from submodules.arditi.select_direction import get_refusal_scores
+from submodules.arditi.select_direction import get_refusal_scores, get_last_position_logits, kl_div_fn
 from submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from submodules.expert_steering.expert_selection import get_candidate_experts
@@ -380,27 +380,41 @@ def normalize_direction(direction, activation_rms, position, mode):
 def run_grid_search(
     model_base, model_card, mean_diff, activation_rms,
     layer, expert_id,
-    harmful_val, normalize_mode,
-    grid_coeffs, batch_size=32
+    harmful_val, harmless_val, normalize_mode,
+    grid_coeffs, batch_size=32, kl_threshold=None
 ):
     """
-    Grid search over (position, coeff) using Arditi refusal scores on val set.
+    Grid search over (position, coeff) using Arditi refusal scores on val set,
+    filtered by KL divergence on harmless data to discard combos that break coherence.
 
-    For each (position, coeff) combo, computes the mean refusal score on harmful_val
-    with the intervention applied (negative coeff to suppress refusal). Lower score
-    means more refusal suppression = better.
+    For each (position, coeff) combo:
+    1. Compute mean refusal score on harmful_val (lower = more suppression)
+    2. Compute KL divergence on harmless_val vs baseline (measures coherence damage)
+    3. Discard combos where KL > threshold
+
+    Among passing combos, pick the one with lowest refusal score.
 
     Returns:
-        (best_position, best_coeff, results_list) where results_list contains
-        dicts with all scores for logging.
+        (best_position, best_coeff, all_results, filtered_results) where
+        all_results contains every combo and filtered_results contains only
+        combos that passed the KL filter, both sorted by refusal score.
     """
     from tqdm import tqdm
+
+    # Get KL threshold from model card or use default
+    if kl_threshold is None:
+        if hasattr(model_card, 'get_expert_steering_thresholds'):
+            thresholds = model_card.get_expert_steering_thresholds()
+            kl_threshold = thresholds.get('kl_threshold', 1.0)
+        else:
+            kl_threshold = 1.0
 
     positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
 
     print(f"\n  Grid search: {len(positions)} positions x {len(grid_coeffs)} coeffs = {len(positions) * len(grid_coeffs)} combos")
     print(f"  Positions: {positions}")
     print(f"  Coeffs: {grid_coeffs}")
+    print(f"  KL threshold: {kl_threshold}")
 
     # Get baseline refusal score (no intervention)
     baseline_scores = get_refusal_scores(
@@ -413,7 +427,19 @@ def run_grid_search(
     baseline_mean = baseline_scores.mean().item()
     print(f"  Baseline harmful refusal score: {baseline_mean:.4f}")
 
-    results = []
+    # Get baseline harmless logits for KL computation
+    print(f"  Collecting baseline harmless logits...")
+    baseline_harmless_logits = get_last_position_logits(
+        model=model_base.model,
+        tokenizer=model_base.tokenizer,
+        instructions=harmless_val,
+        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+        fwd_pre_hooks=[],
+        fwd_hooks=[],
+        batch_size=batch_size
+    )
+
+    all_results = []
     best_score = float('inf')
     best_position = None
     best_coeff = None
@@ -441,6 +467,7 @@ def run_grid_search(
                 )
                 fwd_hooks = [(mlp_module, hook_fn)]
 
+                # Compute refusal score on harmful val
                 scores = get_refusal_scores(
                     model_base.model, harmful_val,
                     model_base.tokenize_instructions_fn, model_base.refusal_toks,
@@ -450,33 +477,67 @@ def run_grid_search(
                 )
                 mean_score = scores.mean().item()
 
-                results.append({
+                # Compute KL divergence on harmless val
+                intervention_logits = get_last_position_logits(
+                    model=model_base.model,
+                    tokenizer=model_base.tokenizer,
+                    instructions=harmless_val,
+                    tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                    fwd_pre_hooks=[],
+                    fwd_hooks=fwd_hooks,
+                    batch_size=batch_size
+                )
+                kl_div = kl_div_fn(
+                    baseline_harmless_logits, intervention_logits, mask=None
+                ).mean(dim=0).item()
+
+                passed_kl = kl_div <= kl_threshold
+
+                all_results.append({
                     "position": position,
                     "coeff": coeff,
                     "refusal_score": mean_score,
                     "refusal_reduction": baseline_mean - mean_score,
+                    "kl_div": kl_div,
+                    "passed_kl": passed_kl,
                 })
 
-                if mean_score < best_score:
+                if passed_kl and mean_score < best_score:
                     best_score = mean_score
                     best_position = position
                     best_coeff = coeff
 
                 pbar.update(1)
-                pbar.set_postfix(best=f"pos={best_position} coeff={best_coeff} score={best_score:.4f}")
+                status = f"pos={best_position} coeff={best_coeff} score={best_score:.4f}" if best_position is not None else "no passing combo yet"
+                pbar.set_postfix_str(f"best: {status}")
 
-    # Sort results by refusal score (lowest = most suppression)
-    results.sort(key=lambda x: x["refusal_score"])
+    # Sort all results by refusal score
+    all_results.sort(key=lambda x: x["refusal_score"])
 
-    print(f"\n  Grid search results (top 10):")
-    print(f"  {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
-    print(f"  {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
-    for r in results[:10]:
-        print(f"  {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
+    # Create filtered list (passing KL only), sorted by refusal score
+    filtered_results = [r for r in all_results if r["passed_kl"]]
 
-    print(f"\n  Best: position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}")
+    n_passed = len(filtered_results)
+    n_failed = len(all_results) - n_passed
 
-    return best_position, best_coeff, results
+    print(f"\n  Grid search: {n_passed} passed KL filter (threshold={kl_threshold}), {n_failed} filtered out")
+    print(f"\n  Top 10 results (passing KL filter):")
+    print(f"  {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>10}")
+    print(f"  {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*10}")
+    for r in filtered_results[:10]:
+        print(f"  {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} {r['kl_div']:>10.4f}")
+
+    if best_position is not None:
+        print(f"\n  Best: position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}")
+    else:
+        print(f"\n  WARNING: No combo passed KL filter! Using lowest-KL combo as fallback.")
+        all_results_by_kl = sorted(all_results, key=lambda x: x["kl_div"])
+        best_position = all_results_by_kl[0]["position"]
+        best_coeff = all_results_by_kl[0]["coeff"]
+        best_score = all_results_by_kl[0]["refusal_score"]
+        print(f"  Fallback: position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}, kl_div={all_results_by_kl[0]['kl_div']:.4f}")
+
+    return best_position, best_coeff, all_results, filtered_results
 
 
 def run_single_experiment(
@@ -802,7 +863,7 @@ def run_topdiff_pipeline(args):
             if normalize_mode == 'expert_scale' and activation_rms is None:
                 normalize_mode = 'none'
 
-            best_position, best_coeff, grid_results = run_grid_search(
+            best_position, best_coeff, all_results, filtered_results = run_grid_search(
                 model_base=model_base,
                 model_card=model_card,
                 mean_diff=mean_diff,
@@ -810,6 +871,7 @@ def run_topdiff_pipeline(args):
                 layer=layer,
                 expert_id=expert_id,
                 harmful_val=harmful_val,
+                harmless_val=harmless_val,
                 normalize_mode=normalize_mode,
                 grid_coeffs=args.grid_coeffs,
                 batch_size=args.batch_size
@@ -819,14 +881,24 @@ def run_topdiff_pipeline(args):
             grid_output_dir = os.path.join(base_output_dir, f"rank_{rank}_L{layer}_E{expert_id}")
             os.makedirs(grid_output_dir, exist_ok=True)
 
-            with open(os.path.join(grid_output_dir, "grid_search_results.json"), 'w') as f:
+            with open(os.path.join(grid_output_dir, "grid_search_all_results.json"), 'w') as f:
                 json.dump({
                     "best_position": best_position,
                     "best_coeff": best_coeff,
                     "layer": layer,
                     "expert_id": expert_id,
                     "rank": rank,
-                    "results": grid_results
+                    "results": all_results
+                }, f, indent=2)
+
+            with open(os.path.join(grid_output_dir, "grid_search_filtered_results.json"), 'w') as f:
+                json.dump({
+                    "best_position": best_position,
+                    "best_coeff": best_coeff,
+                    "layer": layer,
+                    "expert_id": expert_id,
+                    "rank": rank,
+                    "results": filtered_results
                 }, f, indent=2)
 
             # Run full eval with best combo
