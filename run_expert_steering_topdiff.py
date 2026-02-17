@@ -265,7 +265,7 @@ def load_and_sample_datasets(cfg):
     # Load full datasets
     harmful_train_full = load_dataset_split(harmtype='harmful', split='train', instructions_only=True)
     harmless_train_full = load_dataset_split(harmtype='harmless', split='train', instructions_only=True)
-    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=True)
+    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=False)
     harmless_val_full = load_dataset_split(harmtype='harmless', split='val', instructions_only=True)
     harmful_test_full = load_dataset_split(harmtype='harmful', split='test', instructions_only=True)
     harmless_test_full = load_dataset_split(harmtype='harmless', split='test', instructions_only=False)
@@ -436,6 +436,10 @@ def run_grid_search(
     """
     from tqdm import tqdm
 
+    # Extract instruction strings if harmful_val contains dicts
+    harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+    harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
+
     # Get KL threshold from model card or use default
     if kl_threshold is None:
         if hasattr(model_card, 'get_expert_steering_thresholds'):
@@ -453,7 +457,7 @@ def run_grid_search(
 
     # Get baseline refusal score (no intervention)
     baseline_scores = get_refusal_scores(
-        model_base.model, harmful_val,
+        model_base.model, harmful_val_instructions,
         model_base.tokenize_instructions_fn, model_base.refusal_toks,
         fwd_hooks=[], batch_size=batch_size,
         tokenizer=model_base.tokenizer,
@@ -467,7 +471,7 @@ def run_grid_search(
     baseline_harmless_logits = get_last_position_logits(
         model=model_base.model,
         tokenizer=model_base.tokenizer,
-        instructions=harmless_val,
+        instructions=harmless_val_instructions,
         tokenize_instructions_fn=model_base.tokenize_instructions_fn,
         fwd_pre_hooks=[],
         fwd_hooks=[],
@@ -504,7 +508,7 @@ def run_grid_search(
 
                 # Compute refusal score on harmful val
                 scores = get_refusal_scores(
-                    model_base.model, harmful_val,
+                    model_base.model, harmful_val_instructions,
                     model_base.tokenize_instructions_fn, model_base.refusal_toks,
                     fwd_hooks=fwd_hooks, batch_size=batch_size,
                     tokenizer=model_base.tokenizer,
@@ -516,7 +520,7 @@ def run_grid_search(
                 intervention_logits = get_last_position_logits(
                     model=model_base.model,
                     tokenizer=model_base.tokenizer,
-                    instructions=harmless_val,
+                    instructions=harmless_val_instructions,
                     tokenize_instructions_fn=model_base.tokenize_instructions_fn,
                     fwd_pre_hooks=[],
                     fwd_hooks=fwd_hooks,
@@ -596,6 +600,10 @@ def run_unified_grid_search(
     """
     from tqdm import tqdm
 
+    # Extract instruction strings if val sets contain dicts
+    harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+    harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
+
     # Get KL threshold from model card or use default
     if kl_threshold is None:
         if hasattr(model_card, 'get_expert_steering_thresholds'):
@@ -616,7 +624,7 @@ def run_unified_grid_search(
 
     # Get baseline refusal score (no intervention)
     baseline_scores = get_refusal_scores(
-        model_base.model, harmful_val,
+        model_base.model, harmful_val_instructions,
         model_base.tokenize_instructions_fn, model_base.refusal_toks,
         fwd_hooks=[], batch_size=batch_size,
         tokenizer=model_base.tokenizer,
@@ -630,7 +638,7 @@ def run_unified_grid_search(
     baseline_harmless_logits = get_last_position_logits(
         model=model_base.model,
         tokenizer=model_base.tokenizer,
-        instructions=harmless_val,
+        instructions=harmless_val_instructions,
         tokenize_instructions_fn=model_base.tokenize_instructions_fn,
         fwd_pre_hooks=[],
         fwd_hooks=[],
@@ -675,7 +683,7 @@ def run_unified_grid_search(
 
                     # Compute refusal score on harmful val
                     scores = get_refusal_scores(
-                        model_base.model, harmful_val,
+                        model_base.model, harmful_val_instructions,
                         model_base.tokenize_instructions_fn, model_base.refusal_toks,
                         fwd_hooks=fwd_hooks, batch_size=batch_size,
                         tokenizer=model_base.tokenizer,
@@ -687,7 +695,7 @@ def run_unified_grid_search(
                     intervention_logits = get_last_position_logits(
                         model=model_base.model,
                         tokenizer=model_base.tokenizer,
-                        instructions=harmless_val,
+                        instructions=harmless_val_instructions,
                         tokenize_instructions_fn=model_base.tokenize_instructions_fn,
                         fwd_pre_hooks=[],
                         fwd_hooks=fwd_hooks,
