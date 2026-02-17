@@ -969,14 +969,15 @@ def run_topdiff_pipeline(args):
     print("SELECTING CANDIDATE EXPERTS")
     print("="*80)
 
-    # Get model-specific expert diffs path
+    # Get model-specific expert diffs path (system-prompt-specific)
     expert_diffs_filename = model_card.get_expert_diffs_filename()
-    expert_diffs_path = f"expert_diffs/{expert_diffs_filename}"
+    expert_diffs_dir = f"expert_diffs/sys_prompt_{cfg.system_prompt}"
+    expert_diffs_path = os.path.join(expert_diffs_dir, expert_diffs_filename)
 
     # Generate expert diffs if they don't exist
     if not os.path.exists(expert_diffs_path):
         print(f"Expert diffs not found at {expert_diffs_path}, generating...")
-        os.makedirs("expert_diffs", exist_ok=True)
+        os.makedirs(expert_diffs_dir, exist_ok=True)
         model_card.generate_expert_diffs(
             harmful_dataset_path="dataset/splits/harmful_train.json",
             harmless_dataset_path="dataset/splits/harmless_train.json",
