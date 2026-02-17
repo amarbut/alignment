@@ -16,6 +16,8 @@ Modes:
         python run_expert_steering_topdiff.py --position all --coeff 100
     Grid search for best (position, coeff) then full eval:
         python run_expert_steering_topdiff.py --grid_search --expert_rank 2
+    Unified grid search over ALL experts x positions x coeffs:
+        python run_expert_steering_topdiff.py --unified_grid
 """
 
 # =============================================================================
@@ -218,6 +220,14 @@ def parse_arguments():
         nargs='+',
         default=[25, 50, 75, 100, 150, 200, 250, 300],
         help='Coeff values to search over in grid search (default: 25 50 75 100 150 200 250 300)'
+    )
+
+    parser.add_argument(
+        '--unified_grid',
+        action='store_true',
+        help='Run a single unified grid search over ALL experts above threshold '
+             '(plus position and coeff). Picks the single best (expert, position, coeff) combo. '
+             'Implies --grid_search.'
     )
 
     return parser.parse_args()
@@ -540,6 +550,189 @@ def run_grid_search(
     return best_position, best_coeff, all_results, filtered_results
 
 
+def run_unified_grid_search(
+    model_base, model_card, expert_data, candidate_experts, expert_ranks,
+    harmful_val, harmless_val, normalize_mode,
+    grid_coeffs, batch_size=32, kl_threshold=None
+):
+    """
+    Unified grid search over (expert, position, coeff) in a single pass.
+
+    Searches all experts over threshold simultaneously, picking the single best
+    (expert, position, coeff) combo based on refusal score with KL-div filtering.
+
+    Args:
+        expert_data: dict of rank -> (mean_diff, activation_rms)
+        candidate_experts: list of (layer, expert_id, diff_pct) tuples
+        expert_ranks: list of 1-indexed ranks to search over
+
+    Returns:
+        (best_rank, best_position, best_coeff, all_results, filtered_results)
+    """
+    from tqdm import tqdm
+
+    # Get KL threshold from model card or use default
+    if kl_threshold is None:
+        if hasattr(model_card, 'get_expert_steering_thresholds'):
+            thresholds = model_card.get_expert_steering_thresholds()
+            kl_threshold = thresholds.get('kl_threshold', 1.0)
+        else:
+            kl_threshold = 1.0
+
+    positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
+
+    n_experts = len(expert_ranks)
+    total = n_experts * len(positions) * len(grid_coeffs)
+    print(f"\n  Unified grid search: {n_experts} experts x {len(positions)} positions x {len(grid_coeffs)} coeffs = {total} combos")
+    print(f"  Experts: {[(candidate_experts[r-1][0], candidate_experts[r-1][1]) for r in expert_ranks]}")
+    print(f"  Positions: {positions}")
+    print(f"  Coeffs: {grid_coeffs}")
+    print(f"  KL threshold: {kl_threshold}")
+
+    # Get baseline refusal score (no intervention)
+    baseline_scores = get_refusal_scores(
+        model_base.model, harmful_val,
+        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+        fwd_hooks=[], batch_size=batch_size,
+        tokenizer=model_base.tokenizer,
+        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+    )
+    baseline_mean = baseline_scores.mean().item()
+    print(f"  Baseline harmful refusal score: {baseline_mean:.4f}")
+
+    # Get baseline harmless logits for KL computation
+    print(f"  Collecting baseline harmless logits...")
+    baseline_harmless_logits = get_last_position_logits(
+        model=model_base.model,
+        tokenizer=model_base.tokenizer,
+        instructions=harmless_val,
+        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+        fwd_pre_hooks=[],
+        fwd_hooks=[],
+        batch_size=batch_size
+    )
+
+    all_results = []
+    best_score = float('inf')
+    best_rank = None
+    best_position = None
+    best_coeff = None
+
+    with tqdm(total=total, desc="  Unified grid search") as pbar:
+        for rank in expert_ranks:
+            layer, expert_id, diff_pct = candidate_experts[rank - 1]
+            mean_diff, activation_rms = expert_data[rank]
+
+            # Resolve normalize mode for this expert
+            norm_mode = normalize_mode
+            if norm_mode == 'expert_scale' and activation_rms is None:
+                norm_mode = 'none'
+
+            mlp_module = model_card.get_mlp_module(layer)
+
+            for position in positions:
+                direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
+                if norm_mode == 'unit':
+                    direction = direction / direction.norm()
+                elif norm_mode == 'expert_scale' and activation_rms is not None:
+                    scale = activation_rms[position].to(direction.device)
+                    direction = direction / direction.norm() * scale
+
+                for coeff in grid_coeffs:
+                    hook_fn = get_expert_weighted_activation_addition_hook(
+                        direction=direction,
+                        expert_id=expert_id,
+                        coeff=-coeff,
+                        model_card=model_card
+                    )
+                    fwd_hooks = [(mlp_module, hook_fn)]
+
+                    # Compute refusal score on harmful val
+                    scores = get_refusal_scores(
+                        model_base.model, harmful_val,
+                        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                        fwd_hooks=fwd_hooks, batch_size=batch_size,
+                        tokenizer=model_base.tokenizer,
+                        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                    )
+                    mean_score = scores.mean().item()
+
+                    # Compute KL divergence on harmless val
+                    intervention_logits = get_last_position_logits(
+                        model=model_base.model,
+                        tokenizer=model_base.tokenizer,
+                        instructions=harmless_val,
+                        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                        fwd_pre_hooks=[],
+                        fwd_hooks=fwd_hooks,
+                        batch_size=batch_size
+                    )
+                    kl_div = kl_div_fn(
+                        baseline_harmless_logits, intervention_logits, mask=None
+                    ).mean(dim=0).item()
+
+                    passed_kl = kl_div <= kl_threshold
+
+                    all_results.append({
+                        "rank": rank,
+                        "layer": layer,
+                        "expert_id": expert_id,
+                        "diff_pct": diff_pct,
+                        "position": position,
+                        "coeff": coeff,
+                        "refusal_score": mean_score,
+                        "refusal_reduction": baseline_mean - mean_score,
+                        "kl_div": kl_div,
+                        "passed_kl": passed_kl,
+                    })
+
+                    if passed_kl and mean_score < best_score:
+                        best_score = mean_score
+                        best_rank = rank
+                        best_position = position
+                        best_coeff = coeff
+
+                    pbar.update(1)
+                    if best_rank is not None:
+                        bl, be = candidate_experts[best_rank - 1][0], candidate_experts[best_rank - 1][1]
+                        status = f"L{bl}E{be} pos={best_position} coeff={best_coeff} score={best_score:.4f}"
+                    else:
+                        status = "no passing combo yet"
+                    pbar.set_postfix_str(f"best: {status}")
+
+    # Sort all results by refusal score
+    all_results.sort(key=lambda x: x["refusal_score"])
+
+    # Create filtered list (passing KL only)
+    filtered_results = [r for r in all_results if r["passed_kl"]]
+
+    n_passed = len(filtered_results)
+    n_failed = len(all_results) - n_passed
+
+    print(f"\n  Unified grid search: {n_passed} passed KL filter (threshold={kl_threshold}), {n_failed} filtered out")
+    print(f"\n  Top 10 results (passing KL filter):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>10}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*10}")
+    for r in filtered_results[:10]:
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} {r['kl_div']:>10.4f}")
+
+    if best_rank is not None:
+        bl, be = candidate_experts[best_rank - 1][0], candidate_experts[best_rank - 1][1]
+        print(f"\n  Best: rank={best_rank} (L{bl} E{be}), position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}")
+    else:
+        print(f"\n  WARNING: No combo passed KL filter! Using lowest-KL combo as fallback.")
+        all_results_by_kl = sorted(all_results, key=lambda x: x["kl_div"])
+        fallback = all_results_by_kl[0]
+        best_rank = fallback["rank"]
+        best_position = fallback["position"]
+        best_coeff = fallback["coeff"]
+        best_score = fallback["refusal_score"]
+        print(f"  Fallback: rank={best_rank}, position={best_position}, coeff={best_coeff}, refusal_score={best_score:.4f}, kl_div={fallback['kl_div']:.4f}")
+
+    return best_rank, best_position, best_coeff, all_results, filtered_results
+
+
 def run_single_experiment(
     args, cfg, model_base, expert_entry, rank,
     mean_diff, activation_rms, position,
@@ -681,6 +874,10 @@ def run_topdiff_pipeline(args):
     else:
         positions = [int(args.position)]
 
+    # --unified_grid implies --grid_search
+    if args.unified_grid:
+        args.grid_search = True
+
     # Determine which expert ranks to run
     if args.sweep_experts is not None:
         expert_ranks = list(range(1, args.sweep_experts + 1))
@@ -692,7 +889,9 @@ def run_topdiff_pipeline(args):
     print("="*80)
     print(f"Model: {args.model_path}")
     print(f"Expert threshold: {args.threshold}%")
-    if args.grid_search:
+    if args.unified_grid:
+        print(f"Mode: UNIFIED GRID SEARCH over experts x positions x coeffs {args.grid_coeffs}")
+    elif args.grid_search:
         print(f"Mode: GRID SEARCH over positions x coeffs {args.grid_coeffs}")
     else:
         print(f"Coefficient: {args.coeff}")
@@ -792,6 +991,11 @@ def run_topdiff_pipeline(args):
         expert_diffs_path=expert_diffs_path
     )
 
+    # For unified_grid, use ALL experts above threshold
+    if args.unified_grid:
+        expert_ranks = list(range(1, len(candidate_experts) + 1))
+        print(f"\nUnified grid: using all {len(candidate_experts)} experts above {args.threshold}% threshold")
+
     max_rank = max(expert_ranks)
     if max_rank > len(candidate_experts):
         print(f"ERROR: Requested rank {max_rank} but only {len(candidate_experts)} experts above threshold")
@@ -853,71 +1057,135 @@ def run_topdiff_pipeline(args):
         print("GRID SEARCH")
         print("="*80)
 
-        for rank in expert_ranks:
-            layer, expert_id, diff_pct = candidate_experts[rank - 1]
-            mean_diff, activation_rms = expert_data[rank]
-
-            print(f"\n  Grid search for rank {rank}: L{layer} E{expert_id} (diff={diff_pct:.2f}%)")
-
-            normalize_mode = args.normalize
-            if normalize_mode == 'expert_scale' and activation_rms is None:
-                normalize_mode = 'none'
-
-            best_position, best_coeff, all_results, filtered_results = run_grid_search(
+        if args.unified_grid:
+            # Single unified search over all experts x positions x coeffs
+            best_rank, best_position, best_coeff, all_results, filtered_results = run_unified_grid_search(
                 model_base=model_base,
                 model_card=model_card,
-                mean_diff=mean_diff,
-                activation_rms=activation_rms,
-                layer=layer,
-                expert_id=expert_id,
+                expert_data=expert_data,
+                candidate_experts=candidate_experts,
+                expert_ranks=expert_ranks,
                 harmful_val=harmful_val,
                 harmless_val=harmless_val,
-                normalize_mode=normalize_mode,
+                normalize_mode=args.normalize,
                 grid_coeffs=args.grid_coeffs,
                 batch_size=args.batch_size
             )
 
-            # Save grid search results
-            grid_output_dir = os.path.join(base_output_dir, f"rank_{rank}_L{layer}_E{expert_id}")
+            # Save results
+            grid_output_dir = os.path.join(base_output_dir, "unified_grid_search")
             os.makedirs(grid_output_dir, exist_ok=True)
+
+            best_layer, best_expert_id, best_diff_pct = candidate_experts[best_rank - 1]
 
             with open(os.path.join(grid_output_dir, "grid_search_all_results.json"), 'w') as f:
                 json.dump({
+                    "best_rank": best_rank,
+                    "best_layer": best_layer,
+                    "best_expert_id": best_expert_id,
                     "best_position": best_position,
                     "best_coeff": best_coeff,
-                    "layer": layer,
-                    "expert_id": expert_id,
-                    "rank": rank,
+                    "n_experts": len(expert_ranks),
                     "results": all_results
                 }, f, indent=2)
 
             with open(os.path.join(grid_output_dir, "grid_search_filtered_results.json"), 'w') as f:
                 json.dump({
+                    "best_rank": best_rank,
+                    "best_layer": best_layer,
+                    "best_expert_id": best_expert_id,
                     "best_position": best_position,
                     "best_coeff": best_coeff,
-                    "layer": layer,
-                    "expert_id": expert_id,
-                    "rank": rank,
+                    "n_experts": len(expert_ranks),
                     "results": filtered_results
                 }, f, indent=2)
 
             # Run full eval with best combo
             if not args.skip_eval:
-                print(f"\n  Running full evaluation with best combo: position={best_position}, coeff={best_coeff}")
+                best_mean_diff, best_activation_rms = expert_data[best_rank]
+                print(f"\n  Running full evaluation with best combo: L{best_layer} E{best_expert_id}, position={best_position}, coeff={best_coeff}")
                 run_single_experiment(
                     args=args,
                     cfg=cfg,
                     model_base=model_base,
-                    expert_entry=(layer, expert_id, diff_pct),
-                    rank=rank,
-                    mean_diff=mean_diff,
-                    activation_rms=activation_rms,
+                    expert_entry=(best_layer, best_expert_id, best_diff_pct),
+                    rank=best_rank,
+                    mean_diff=best_mean_diff,
+                    activation_rms=best_activation_rms,
                     position=best_position,
                     harmful_test=harmful_test,
                     harmless_test=harmless_test,
                     base_output_dir=base_output_dir,
                     coeff_override=best_coeff
                 )
+
+        else:
+            # Per-expert grid search (original behavior)
+            for rank in expert_ranks:
+                layer, expert_id, diff_pct = candidate_experts[rank - 1]
+                mean_diff, activation_rms = expert_data[rank]
+
+                print(f"\n  Grid search for rank {rank}: L{layer} E{expert_id} (diff={diff_pct:.2f}%)")
+
+                normalize_mode = args.normalize
+                if normalize_mode == 'expert_scale' and activation_rms is None:
+                    normalize_mode = 'none'
+
+                best_position, best_coeff, all_results, filtered_results = run_grid_search(
+                    model_base=model_base,
+                    model_card=model_card,
+                    mean_diff=mean_diff,
+                    activation_rms=activation_rms,
+                    layer=layer,
+                    expert_id=expert_id,
+                    harmful_val=harmful_val,
+                    harmless_val=harmless_val,
+                    normalize_mode=normalize_mode,
+                    grid_coeffs=args.grid_coeffs,
+                    batch_size=args.batch_size
+                )
+
+                # Save grid search results
+                grid_output_dir = os.path.join(base_output_dir, f"rank_{rank}_L{layer}_E{expert_id}")
+                os.makedirs(grid_output_dir, exist_ok=True)
+
+                with open(os.path.join(grid_output_dir, "grid_search_all_results.json"), 'w') as f:
+                    json.dump({
+                        "best_position": best_position,
+                        "best_coeff": best_coeff,
+                        "layer": layer,
+                        "expert_id": expert_id,
+                        "rank": rank,
+                        "results": all_results
+                    }, f, indent=2)
+
+                with open(os.path.join(grid_output_dir, "grid_search_filtered_results.json"), 'w') as f:
+                    json.dump({
+                        "best_position": best_position,
+                        "best_coeff": best_coeff,
+                        "layer": layer,
+                        "expert_id": expert_id,
+                        "rank": rank,
+                        "results": filtered_results
+                    }, f, indent=2)
+
+                # Run full eval with best combo
+                if not args.skip_eval:
+                    print(f"\n  Running full evaluation with best combo: position={best_position}, coeff={best_coeff}")
+                    run_single_experiment(
+                        args=args,
+                        cfg=cfg,
+                        model_base=model_base,
+                        expert_entry=(layer, expert_id, diff_pct),
+                        rank=rank,
+                        mean_diff=mean_diff,
+                        activation_rms=activation_rms,
+                        position=best_position,
+                        harmful_test=harmful_test,
+                        harmless_test=harmless_test,
+                        base_output_dir=base_output_dir,
+                        coeff_override=best_coeff
+                    )
 
     # Standard (non-grid-search) mode
     else:
