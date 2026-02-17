@@ -773,137 +773,212 @@ def run_judge_grid_search(
     output_dir=None
 ):
     """
-    Judge-based grid search over (expert, position, coeff).
+    Two-stage judge-based grid search over (expert, position, coeff).
 
-    For each combo, generates short completions on a small harmful val subset,
-    then uses the OpenAI judge to classify them. Picks the combo with highest
-    full_response rate (ASR).
+    Stage 1: Fast forward-pass refusal scores over all combos. Keeps the top
+    max(ceil(total * 0.05), 15) candidates by lowest refusal score.
+
+    Stage 2: Generate short completions and run the OpenAI judge only on the
+    surviving candidates.
 
     Per-combo completions and evaluations are saved to output_dir/combos/ for
     debugging and inspection.
 
     Returns:
         (best_rank, best_position, best_coeff, all_results)
+        all_results contains all combos with refusal_score from stage 1, and
+        asr/full_response/refusal/non_response for stage-2 candidates.
     """
     from tqdm import tqdm
+    import math
 
     positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
 
-    # Subsample harmful_val
+    # harmful_val contains dicts; extract instructions for refusal score stage
+    harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+    # Subsample for judge stage (dicts needed for generate_completions)
     sample = harmful_val[:n_samples]
 
     n_experts = len(expert_ranks)
     total = n_experts * len(positions) * len(grid_coeffs)
-    print(f"\n  Judge grid search: {n_experts} experts x {len(positions)} positions x {len(grid_coeffs)} coeffs = {total} combos")
-    print(f"  Experts: {[(candidate_experts[r-1][0], candidate_experts[r-1][1]) for r in expert_ranks]}")
-    print(f"  Positions: {positions}")
-    print(f"  Coeffs: {grid_coeffs}")
-    print(f"  Samples: {n_samples}, max_new_tokens: {max_new_tokens}")
+    n_judge = max(math.ceil(total * 0.05), 15)
 
-    # Create combos output directory for per-combo completions and evals
+    print(f"\n  Judge grid search (2-stage): {n_experts} experts x {len(positions)} positions x {len(grid_coeffs)} coeffs = {total} combos")
+    print(f"  Stage 1: refusal score sweep (all {total} combos)")
+    print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(5, round(100*n_judge/total))}%) candidates")
+    print(f"  Positions: {positions}, Coeffs: {grid_coeffs}")
+    print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
+
+    # -------------------------------------------------------------------------
+    # Stage 1: fast refusal score sweep
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 1: Refusal score sweep ---")
+
+    # Baseline refusal score
+    baseline_scores = get_refusal_scores(
+        model_base.model, harmful_val_instructions,
+        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+        fwd_hooks=[], batch_size=batch_size,
+        tokenizer=model_base.tokenizer,
+        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+    )
+    baseline_mean = baseline_scores.mean().item()
+    print(f"  Baseline refusal score: {baseline_mean:.4f}")
+
+    stage1_results = []
+    with tqdm(total=total, desc="  Refusal score sweep") as pbar:
+        for rank in expert_ranks:
+            layer, expert_id, diff_pct = candidate_experts[rank - 1]
+            mean_diff, activation_rms = expert_data[rank]
+
+            norm_mode = normalize_mode
+            if norm_mode == 'expert_scale' and activation_rms is None:
+                norm_mode = 'none'
+
+            mlp_module = model_card.get_mlp_module(layer)
+
+            for position in positions:
+                direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
+                if norm_mode == 'unit':
+                    direction = direction / direction.norm()
+                elif norm_mode == 'expert_scale' and activation_rms is not None:
+                    scale = activation_rms[position].to(direction.device)
+                    direction = direction / direction.norm() * scale
+
+                for coeff in grid_coeffs:
+                    hook_fn = get_expert_weighted_activation_addition_hook(
+                        direction=direction,
+                        expert_id=expert_id,
+                        coeff=-coeff,
+                        model_card=model_card
+                    )
+                    scores = get_refusal_scores(
+                        model_base.model, harmful_val_instructions,
+                        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                        fwd_hooks=[(mlp_module, hook_fn)], batch_size=batch_size,
+                        tokenizer=model_base.tokenizer,
+                        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                    )
+                    mean_score = scores.mean().item()
+
+                    stage1_results.append({
+                        "rank": rank,
+                        "layer": layer,
+                        "expert_id": expert_id,
+                        "diff_pct": diff_pct,
+                        "position": position,
+                        "coeff": coeff,
+                        "refusal_score": mean_score,
+                        "refusal_reduction": baseline_mean - mean_score,
+                    })
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"score={mean_score:.3f}")
+
+    # Sort by refusal score ascending (lowest = most suppression)
+    stage1_results.sort(key=lambda x: x["refusal_score"])
+    candidates = stage1_results[:n_judge]
+
+    print(f"\n  Stage 1 top {n_judge} candidates (by refusal score):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
+    for r in candidates:
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
+
+    # -------------------------------------------------------------------------
+    # Stage 2: OpenAI judge on surviving candidates
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 2: OpenAI judge on {len(candidates)} candidates ---")
+
+    # Create combos output directory
     combos_dir = None
     if output_dir is not None:
         combos_dir = os.path.join(output_dir, "combos")
         os.makedirs(combos_dir, exist_ok=True)
 
-    all_results = []
     best_asr = -1.0
     best_rank = None
     best_position = None
     best_coeff = None
 
-    combo_num = 0
-    for rank in expert_ranks:
-        layer, expert_id, diff_pct = candidate_experts[rank - 1]
-        mean_diff, activation_rms = expert_data[rank]
+    for i, candidate in enumerate(candidates):
+        rank = candidate["rank"]
+        layer = candidate["layer"]
+        expert_id = candidate["expert_id"]
+        position = candidate["position"]
+        coeff = candidate["coeff"]
 
-        # Resolve normalize mode for this expert
+        print(f"\n  [{i+1}/{len(candidates)}] Rank {rank} L{layer} E{expert_id} pos={position} coeff={coeff} (refusal={candidate['refusal_score']:.4f})")
+
+        mean_diff, activation_rms = expert_data[rank]
         norm_mode = normalize_mode
         if norm_mode == 'expert_scale' and activation_rms is None:
             norm_mode = 'none'
 
-        for position in positions:
-            direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+        direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+        if norm_mode == 'unit':
+            direction = direction / direction.norm()
+        elif norm_mode == 'expert_scale' and activation_rms is not None:
+            scale = activation_rms[position].to(direction.device)
+            direction = direction / direction.norm() * scale
 
-            if norm_mode == 'unit':
-                direction = direction / direction.norm()
-            elif norm_mode == 'expert_scale' and activation_rms is not None:
-                scale = activation_rms[position].to(direction.device)
-                direction = direction / direction.norm() * scale
+        fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
+            model_base,
+            layer_idx=layer,
+            expert_id=expert_id,
+            direction=direction,
+            coeff=-coeff
+        )
 
-            for coeff in grid_coeffs:
-                combo_num += 1
-                print(f"\n  [{combo_num}/{total}] Rank {rank} L{layer} E{expert_id} pos={position} coeff={coeff}")
+        completions = model_base.generate_completions(
+            sample,
+            fwd_pre_hooks=fwd_pre_hooks,
+            fwd_hooks=fwd_hooks,
+            max_new_tokens=max_new_tokens,
+            batch_size=batch_size
+        )
 
-                # Get intervention hooks
-                fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
-                    model_base,
-                    layer_idx=layer,
-                    expert_id=expert_id,
-                    direction=direction,
-                    coeff=-coeff
-                )
+        combo_label = f"R{rank}_L{layer}_E{expert_id}_pos{position}_c{coeff}"
+        eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
 
-                # Generate short completions
-                completions = model_base.generate_completions(
-                    sample,
-                    fwd_pre_hooks=fwd_pre_hooks,
-                    fwd_hooks=fwd_hooks,
-                    max_new_tokens=max_new_tokens,
-                    batch_size=batch_size
-                )
+        evaluation = evaluate_jailbreak(
+            completions=completions,
+            methodologies=["openai"],
+            evaluation_path=eval_path,
+            openai_delay=0.1
+        )
 
-                # Save path for this combo's evaluation
-                combo_label = f"R{rank}_L{layer}_E{expert_id}_pos{position}_c{coeff}"
-                if combos_dir is not None:
-                    eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json")
-                else:
-                    eval_path = os.devnull
+        asr = evaluation.get("openai_success_rate", 0.0)
+        counts = evaluation.get("openai_overall_counts", {})
+        n_full = counts.get("full_response", 0)
+        n_refusal = counts.get("refusal", 0)
+        n_non = counts.get("non_response", 0)
 
-                # Judge completions
-                evaluation = evaluate_jailbreak(
-                    completions=completions,
-                    methodologies=["openai"],
-                    evaluation_path=eval_path,
-                    openai_delay=0.1
-                )
+        print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
 
-                asr = evaluation.get("openai_success_rate", 0.0)
-                counts = evaluation.get("openai_overall_counts", {})
-                n_full = counts.get("full_response", 0)
-                n_refusal = counts.get("refusal", 0)
-                n_non = counts.get("non_response", 0)
+        candidate.update({
+            "asr": asr,
+            "full_response": n_full,
+            "refusal_count": n_refusal,
+            "non_response": n_non,
+        })
 
-                print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
+        if asr > best_asr:
+            best_asr = asr
+            best_rank = rank
+            best_position = position
+            best_coeff = coeff
 
-                result = {
-                    "rank": rank,
-                    "layer": layer,
-                    "expert_id": expert_id,
-                    "diff_pct": diff_pct,
-                    "position": position,
-                    "coeff": coeff,
-                    "asr": asr,
-                    "full_response": n_full,
-                    "refusal": n_refusal,
-                    "non_response": n_non,
-                }
-                all_results.append(result)
+    # Build all_results: stage-2 candidates sorted by ASR, then rest sorted by refusal score
+    judged = sorted(candidates, key=lambda x: (-x.get("asr", -1), x.get("non_response", 0)))
+    not_judged = stage1_results[n_judge:]  # already sorted by refusal score
+    all_results = judged + not_judged
 
-                if asr > best_asr:
-                    best_asr = asr
-                    best_rank = rank
-                    best_position = position
-                    best_coeff = coeff
-
-    # Sort by ASR descending, then by non_response ascending as tiebreaker
-    all_results.sort(key=lambda x: (-x["asr"], x["non_response"]))
-
-    print(f"\n  Top 10 results:")
-    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'ASR':>8} {'Full':>6} {'Ref':>6} {'Non':>6}")
-    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*8} {'-'*6} {'-'*6} {'-'*6}")
-    for r in all_results[:10]:
-        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r['asr']:>8.2%} {r['full_response']:>6} {r['refusal']:>6} {r['non_response']:>6}")
+    print(f"\n  Top stage-2 results (by ASR):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'ASR':>8} {'Full':>6} {'Ref':>6} {'Non':>6} {'RefScore':>10}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*8} {'-'*6} {'-'*6} {'-'*6} {'-'*10}")
+    for r in judged[:10]:
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r.get('asr', 0):>8.2%} {r.get('full_response', '-'):>6} {r.get('refusal_count', '-'):>6} {r.get('non_response', '-'):>6} {r['refusal_score']:>10.4f}")
 
     if best_rank is not None:
         bl, be = candidate_experts[best_rank - 1][0], candidate_experts[best_rank - 1][1]
