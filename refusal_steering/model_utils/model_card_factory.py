@@ -62,6 +62,11 @@ def create_model_card(model_base) -> ModelCard:
         from model_utils.olmoe_model_card import OLMoEModelCard
         return OLMoEModelCard(model_base.model, model_base)
 
+    # === Qwen2 MoE Detection ===
+    elif 'Qwen2Model' in model_type or 'qwen' in model_path or 'qwen2moe' in arch_str:
+        from model_utils.qwen2_model_card import Qwen2ModelCard
+        return Qwen2ModelCard(model_base.model, model_base)
+
     else:
         raise ValueError(
             f"No model card available for:\n"

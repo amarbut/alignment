@@ -16,6 +16,7 @@ CACHE_LOCATIONS = {
     'deepseek': '/media/volume/align_2_stg/hf',
     'mixtral': '/media/volume/align_3_stg/hf',
     'olmoe': '/media/volume/align_2_stg/hf',
+    'qwen2': '/media/volume/qwen2/hf',
 }
 
 # Default fallback (uses HF's default ~/.cache/huggingface)
@@ -80,6 +81,8 @@ def set_hf_cache_from_path(model_path: str, verbose: bool = True) -> str:
         return set_hf_cache('deepseek', verbose)
     elif 'olmoe' in model_path_lower:
         return set_hf_cache('olmoe', verbose)
+    elif 'qwen' in model_path_lower:
+        return set_hf_cache('qwen2', verbose)
     else:
         if verbose:
             print(f"Unknown model path '{model_path}', using system default cache")

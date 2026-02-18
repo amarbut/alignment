@@ -1,12 +1,13 @@
 """
 MoE-only Model Factory
 
-This factory only includes the 5 MoE models used for steering research:
+This factory only includes the 6 MoE models used for steering research:
 - OSS (standard HF loading)
 - OSS Unsloth (4-bit quantized via unsloth)
 - Mixtral
 - DeepSeek-MoE
 - OLMoE
+- Qwen2 MoE (BnB 4-bit quantized)
 
 For the full factory including dense models (Llama, Gemma, Qwen, Yi),
 use model_factory.py instead.
@@ -80,8 +81,12 @@ def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -
         from model_utils.olmoe_model import OLMoEModel
         return OLMoEModel(model_path, system_prompt=system_prompt_text)
 
+    elif 'qwen' in model_path_lower:
+        from model_utils.qwen2_model import Qwen2Model
+        return Qwen2Model(model_path, system_prompt=system_prompt_text)
+
     else:
         raise ValueError(
             f"Unknown or unsupported MoE model: {model_path}\n"
-            f"Supported models: oss, unsloth/oss, mixtral, deepseek, olmoe\n"
+            f"Supported models: oss, unsloth/oss, mixtral, deepseek, olmoe, qwen2\n"
         )
