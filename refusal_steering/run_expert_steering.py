@@ -173,6 +173,15 @@ def parse_arguments():
         help='System prompt to use (default: use Config default)'
     )
 
+    parser.add_argument(
+        '--normalize',
+        type=str,
+        default='expert_scale',
+        choices=['none', 'unit', 'expert_scale'],
+        help='Direction normalization mode: none=raw vectors, unit=unit norm, '
+             'expert_scale=unit norm scaled by expert activation RMS (default: expert_scale)'
+    )
+
     return parser.parse_args()
 
 
@@ -284,11 +293,14 @@ def generate_expert_specific_directions(
     Generate mean difference vectors for each candidate expert.
 
     Returns:
-        Dictionary mapping (layer, expert_id) -> mean_diff tensor [pos, d_model]
+        Tuple of:
+            - expert_directions: dict mapping (layer, expert_id) -> mean_diff tensor [pos, d_model]
+            - expert_scales: dict mapping (layer, expert_id) -> activation_rms tensor [pos]
     """
     os.makedirs(artifact_dir, exist_ok=True)
 
     expert_directions = {}
+    expert_scales = {}
 
     print("\n" + "="*80)
     print("GENERATING EXPERT-SPECIFIC DIRECTIONS")
@@ -297,8 +309,8 @@ def generate_expert_specific_directions(
     for layer_idx, expert_id, diff_pct in candidate_experts:
         print(f"\n[Expert: Layer {layer_idx}, Expert {expert_id}, Diff: {diff_pct:.2f}%]")
 
-        # Compute mean difference for this expert
-        mean_diff = get_expert_mean_diff(
+        # Compute mean difference and activation RMS for this expert
+        mean_diff, activation_rms = get_expert_mean_diff(
             model_base,
             harmful_train,
             harmless_train,
@@ -308,6 +320,7 @@ def generate_expert_specific_directions(
         )
 
         expert_directions[(layer_idx, expert_id)] = mean_diff
+        expert_scales[(layer_idx, expert_id)] = activation_rms
 
         # Save individual expert direction
         save_path = os.path.join(
@@ -317,15 +330,19 @@ def generate_expert_specific_directions(
         torch.save(mean_diff, save_path)
         print(f"  Saved to: {save_path}")
 
-    # Save combined dictionary
+    # Save combined dictionaries
     combined_path = os.path.join(artifact_dir, "all_expert_directions.pt")
     torch.save(expert_directions, combined_path)
     print(f"\n✓ Saved all expert directions to: {combined_path}")
 
-    return expert_directions
+    scales_path = os.path.join(artifact_dir, "all_expert_scales.pt")
+    torch.save(expert_scales, scales_path)
+    print(f"✓ Saved all expert scales to: {scales_path}")
+
+    return expert_directions, expert_scales
 
 
-def create_candidate_tensor(expert_directions):
+def create_candidate_tensor(expert_directions, expert_scales=None):
     """
     Convert expert directions to format compatible with Arditi's select_direction.
 
@@ -334,6 +351,8 @@ def create_candidate_tensor(expert_directions):
 
     We'll create a synthetic "layer" dimension where each (layer, expert) pair
     gets its own index. Then select_direction will pick the best across all.
+
+    If expert_scales is provided, also creates a scales tensor [n_positions, n_candidates].
     """
     # Get dimensions from first entry
     first_key = list(expert_directions.keys())[0]
@@ -346,14 +365,22 @@ def create_candidate_tensor(expert_directions):
     candidates = torch.zeros(n_positions, n_candidates, d_model,
                             dtype=first_tensor.dtype, device=first_tensor.device)
 
+    # Create scales tensor if provided: [n_positions, n_candidates]
+    candidate_scales = None
+    if expert_scales is not None:
+        candidate_scales = torch.zeros(n_positions, n_candidates,
+                                       dtype=first_tensor.dtype, device=first_tensor.device)
+
     # Create mapping from candidate_idx -> (layer, expert)
     candidate_mapping = {}
 
     for idx, ((layer, expert), direction) in enumerate(expert_directions.items()):
         candidates[:, idx, :] = direction
         candidate_mapping[idx] = (layer, expert)
+        if expert_scales is not None and (layer, expert) in expert_scales:
+            candidate_scales[:, idx] = expert_scales[(layer, expert)]
 
-    return candidates, candidate_mapping
+    return candidates, candidate_mapping, candidate_scales
 
 
 def select_best_expert_direction(
@@ -365,6 +392,8 @@ def select_best_expert_direction(
     model_card,
     top_n=1,
     batch_size=32
+    normalize='expert_scale',
+    expert_scales=None
 ):
     """
     Select the best expert-specific direction(s) using Arditi's criteria.
@@ -384,10 +413,14 @@ def select_best_expert_direction(
     print("="*80)
 
     # Convert to format compatible with select_direction
-    candidates, candidate_mapping = create_candidate_tensor(expert_directions)
+    candidates, candidate_mapping, candidate_scales = create_candidate_tensor(
+        expert_directions, expert_scales
+    )
 
     print(f"Candidates tensor shape: {candidates.shape}")
     print(f"Number of expert candidates: {len(candidate_mapping)}")
+    if candidate_scales is not None:
+        print(f"Candidate scales tensor shape: {candidate_scales.shape}")
 
     # Use expert-specific MLP-level selection
     mu_b = torch.zeros(candidates.size(-1), device=candidates.device)
@@ -405,6 +438,8 @@ def select_best_expert_direction(
         top_n=top_n,
         model_card=model_card,
         batch_size=batch_size
+        normalize=normalize,
+        candidate_scales=candidate_scales
     )
 
     # Handle single vs multiple directions
@@ -456,6 +491,7 @@ def generate_and_evaluate_completions(
     # Load dataset if not provided
     if dataset is None:
         dataset = load_dataset(dataset_name)
+        dataset = random.sample(dataset, min(100, len(dataset)))
 
     # Get intervention hooks - handle both single and multiple directions
     if isinstance(expert_info, list):
@@ -524,6 +560,7 @@ def run_expert_specific_pipeline(args):
     print(f"Model: {args.model_path}")
     print(f"Expert threshold: {args.threshold}%")
     print(f"Coefficient: {args.coeff}")
+    print(f"Normalize mode: {args.normalize}")
     print(f"Expert type: {args.expert_type}")
     print("="*80)
 
@@ -564,6 +601,9 @@ def run_expert_specific_pipeline(args):
         output_dir = os.path.join(base_output_dir, f"top_{args.top_n}_eval")
     else:
         output_dir = base_output_dir
+
+    if args.normalize != 'none':
+        output_dir = os.path.join(output_dir, f"normalized_{args.normalize}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -639,21 +679,31 @@ def run_expert_specific_pipeline(args):
         ]
         json.dump(expert_info, f, indent=2)
 
-    # Generate expert-specific directions
+    # Generate expert-specific directions (always in base_output_dir, independent of normalize)
     if not args.skip_generate:
-        expert_directions = generate_expert_specific_directions(
+        expert_directions, expert_scales = generate_expert_specific_directions(
             model_base,
             harmful_train,
             harmless_train,
             candidate_experts,
-            artifact_dir=os.path.join(output_dir, "expert_directions"),
+            artifact_dir=os.path.join(base_output_dir, "expert_directions"),
             batch_size=args.batch_size
         )
     else:
         print("\nSkipping generation, loading from cache...")
-        cache_dir = base_output_dir if args.skip_select else output_dir
-        directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
+        directions_path = os.path.join(base_output_dir, "expert_directions", "all_expert_directions.pt")
         expert_directions = torch.load(directions_path)
+
+        # Load expert scales if available (needed for expert_scale normalization)
+        expert_scales = None
+        scales_path = os.path.join(base_output_dir, "expert_directions", "all_expert_scales.pt")
+        if os.path.exists(scales_path):
+            expert_scales = torch.load(scales_path)
+            print(f"  Loaded expert scales from: {scales_path}")
+        elif args.normalize == 'expert_scale':
+            print(f"  WARNING: No expert scales found at {scales_path}")
+            print(f"  Falling back to normalize='unit'. Re-run without --skip_generate to compute scales.")
+            args.normalize = 'unit'
 
 
     # Select best direction(s)
@@ -667,6 +717,8 @@ def run_expert_specific_pipeline(args):
             top_n=args.top_n,
             model_card=model_card,
             batch_size=args.batch_size
+            normalize=args.normalize,
+            expert_scales=expert_scales
         )
 
         # Handle single vs multiple directions
@@ -793,16 +845,36 @@ def run_expert_specific_pipeline(args):
         print("="*80)
 
         # Prepare expert_info for evaluation - handle single vs multiple
+        def normalize_direction(direction_vec, layer_idx, expert_id_val, pos_val):
+            """Apply normalization based on args.normalize mode."""
+            orig_norm = direction_vec.norm().item()
+            if args.normalize == 'unit':
+                direction_vec = direction_vec / direction_vec.norm()
+                print(f"  Normalized direction (L{layer_idx} E{expert_id_val}): "
+                      f"norm {orig_norm:.4f} -> 1.0 (unit)")
+            elif args.normalize == 'expert_scale':
+                scale = expert_scales[(layer_idx, expert_id_val)][pos_val].to(direction_vec.device)
+                direction_vec = direction_vec / direction_vec.norm() * scale
+                new_norm = direction_vec.norm().item()
+                print(f"  Normalized direction (L{layer_idx} E{expert_id_val}): "
+                      f"norm {orig_norm:.4f} -> {new_norm:.4f} (expert_scale={scale.item():.4f})")
+            else:
+                print(f"  Direction (L{layer_idx} E{expert_id_val}): norm {orig_norm:.4f} (no normalization)")
+            return direction_vec
+
         if args.top_n == 1:
             # Move direction to model device and dtype
             direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
+            direction = normalize_direction(direction, layer, expert_id, pos)
             expert_info = (layer, expert_id, direction)
         else:
             # Move all directions to model device and dtype
-            expert_info = [
-                (layer, expert_id, direction.to(model_base.model.device, dtype=model_base.model.dtype))
-                for _, layer, expert_id, direction in selected_directions
-            ]
+            expert_info_list = []
+            for pos_i, layer_i, expert_id_i, direction_i in selected_directions:
+                direction_i = direction_i.to(model_base.model.device, dtype=model_base.model.dtype)
+                direction_i = normalize_direction(direction_i, layer_i, expert_id_i, pos_i)
+                expert_info_list.append((layer_i, expert_id_i, direction_i))
+            expert_info = expert_info_list
         if not args.skip_baseline:
             # Baseline (no intervention)
             print("\n" + "-"*80)

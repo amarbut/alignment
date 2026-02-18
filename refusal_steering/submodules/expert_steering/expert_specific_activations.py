@@ -242,12 +242,15 @@ def get_expert_mean_diff(
     *,
     batch_size: int = 32,
     model_card: Optional["ModelCard"] = None
-) -> Float[Tensor, "pos d_model"]:
+) -> Tuple[Float[Tensor, "pos d_model"], Float[Tensor, "pos"]]:
     """
     Compute mean difference for a specific expert.
 
     Returns:
-        Mean difference with shape [n_positions, d_model]
+        Tuple of:
+            - Mean difference with shape [n_positions, d_model]
+            - Activation RMS per position with shape [n_positions]
+              (element-wise RMS of the expert's typical output, averaged over harmful/harmless)
     """
     # Get or create model card
     if model_card is None:
@@ -270,7 +273,12 @@ def get_expert_mean_diff(
 
     mean_diff = mean_harmful - mean_harmless
 
+    # Compute per-position activation RMS: element-wise RMS averaged over harmful/harmless
+    # Shape: [n_positions]
+    activation_rms = ((mean_harmful**2 + mean_harmless**2) / 2).mean(dim=-1).sqrt()
+
     print(f"  Mean diff shape: {mean_diff.shape}")
     print(f"  Mean diff magnitude: {mean_diff.norm(dim=-1).mean().item():.4f}")
+    print(f"  Activation RMS per position: {activation_rms.tolist()}")
 
-    return mean_diff
+    return mean_diff, activation_rms
