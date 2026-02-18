@@ -201,6 +201,16 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        '--expert_diff_system_prompt',
+        type=str,
+        default=None,
+        choices=['none', 'llama_2', 'lightweight'],
+        help='System prompt whose expert diffs to load, independent of --system_prompt. '
+             'If not set, uses the evaluation system prompt (current behavior). '
+             'Useful for reusing diffs computed with system_prompt=none across eval configs.'
+    )
+
+    parser.add_argument(
         '--normalize',
         type=str,
         default='none',
@@ -1227,14 +1237,28 @@ def run_topdiff_pipeline(args):
 
     # Get model-specific expert diffs path (system-prompt-specific)
     expert_diffs_filename = model_card.get_expert_diffs_filename()
-    expert_diffs_dir = f"expert_diffs/sys_prompt_{cfg.system_prompt}"
+    diff_sys_prompt = args.expert_diff_system_prompt if args.expert_diff_system_prompt is not None else cfg.system_prompt
+    expert_diffs_dir = f"expert_diffs/sys_prompt_{diff_sys_prompt}"
     expert_diffs_path = os.path.join(expert_diffs_dir, expert_diffs_filename)
+    if args.expert_diff_system_prompt is not None:
+        print(f"  Using expert diffs from system_prompt='{diff_sys_prompt}' (overrides eval system_prompt='{cfg.system_prompt}')")
 
     # Generate expert diffs if they don't exist
     if not os.path.exists(expert_diffs_path):
         print(f"Expert diffs not found at {expert_diffs_path}, generating...")
         os.makedirs(expert_diffs_dir, exist_ok=True)
-        model_card.generate_expert_diffs(
+
+        # If diffs use a different system prompt than the eval model, we need a
+        # temporary model_base with the correct tokenization/system prompt
+        if args.expert_diff_system_prompt is not None and args.expert_diff_system_prompt != cfg.system_prompt:
+            print(f"  Constructing temporary model with system_prompt='{diff_sys_prompt}' for diff generation...")
+            diff_model_base = construct_model_base(args.model_path, system_prompt=diff_sys_prompt)
+            diff_model_card = create_model_card(diff_model_base)
+        else:
+            diff_model_base = model_base
+            diff_model_card = model_card
+
+        diff_model_card.generate_expert_diffs(
             harmful_dataset_path="dataset/splits/harmful_train.json",
             harmless_dataset_path="dataset/splits/harmless_train.json",
             output_path=expert_diffs_path,
