@@ -28,6 +28,35 @@ def load_expert_diffs(filepath: str = "expert_explore/oss_expert_diffs.json") ->
     return data
 
 
+def _parse_entry(entry):
+    """
+    Parse an expert diff entry, handling old and new formats.
+
+    Old format: [expert_id, diff]
+    New format: [expert_id, diff, harmful_pct, harmless_pct]
+
+    Returns: (expert_id, diff, harmful_pct, harmless_pct)
+    """
+    if len(entry) == 4:
+        return entry[0], entry[1], entry[2], entry[3]
+    else:
+        return entry[0], entry[1], None, None
+
+
+def _layer_idx(layer_str):
+    return int(layer_str.replace('layer_', '')) if layer_str.startswith('layer_') else int(layer_str)
+
+
+def _matches_type(diff, return_type):
+    if return_type == "both":
+        return True
+    elif return_type == "harmful_preferred":
+        return diff > 0
+    elif return_type == "harmless_preferred":
+        return diff < 0
+    return False
+
+
 def select_experts_by_threshold(
     expert_diffs: Dict,
     threshold: float = 15.0,
@@ -37,38 +66,93 @@ def select_experts_by_threshold(
     Select experts with activation frequency difference above threshold.
 
     Args:
-        expert_diffs: Dictionary mapping layer -> list of [expert_id, diff]
+        expert_diffs: Dictionary mapping layer -> list of entries
         threshold: Minimum absolute difference (percentage points)
         return_type: "harmful_preferred", "harmless_preferred", or "both"
 
     Returns:
-        List of (layer, expert_id, diff) tuples
+        List of (layer, expert_id, diff) tuples, sorted by abs(diff) descending
     """
     selected = []
 
     for layer_str, experts_data in expert_diffs.items():
-        # Handle both "layer_0" format and plain "0" format
-        if layer_str.startswith('layer_'):
-            layer_idx = int(layer_str.replace('layer_', ''))
-        else:
-            layer_idx = int(layer_str)
+        layer_idx = _layer_idx(layer_str)
+        for entry in experts_data:
+            expert_id, diff, _, _ = _parse_entry(entry)
+            if abs(diff) >= threshold and _matches_type(diff, return_type):
+                selected.append((layer_idx, expert_id, diff))
 
-        for expert_id, diff in experts_data:
-            abs_diff = abs(diff)
-
-            if abs_diff >= threshold:
-                # Check if this expert matches the requested type
-                if return_type == "both":
-                    selected.append((layer_idx, expert_id, diff))
-                elif return_type == "harmful_preferred" and diff > 0:
-                    selected.append((layer_idx, expert_id, diff))
-                elif return_type == "harmless_preferred" and diff < 0:
-                    selected.append((layer_idx, expert_id, diff))
-
-    # Sort by absolute difference (largest first)
     selected.sort(key=lambda x: abs(x[2]), reverse=True)
-
     return selected
+
+
+def select_experts_by_top_pct(
+    expert_diffs: Dict,
+    top_pct: float = 5.0,
+    return_type: str = "harmful_preferred"
+) -> List[Tuple[int, int, float]]:
+    """
+    Select the top N% of experts by absolute activation frequency difference.
+
+    Args:
+        expert_diffs: Dictionary mapping layer -> list of entries
+        top_pct: Percentage of experts to keep (e.g. 5.0 = top 5%)
+        return_type: "harmful_preferred", "harmless_preferred", or "both"
+
+    Returns:
+        List of (layer, expert_id, diff) tuples, sorted by abs(diff) descending
+    """
+    import math
+
+    all_matching = []
+    for layer_str, experts_data in expert_diffs.items():
+        layer_idx = _layer_idx(layer_str)
+        for entry in experts_data:
+            expert_id, diff, _, _ = _parse_entry(entry)
+            if _matches_type(diff, return_type):
+                all_matching.append((layer_idx, expert_id, diff))
+
+    all_matching.sort(key=lambda x: abs(x[2]), reverse=True)
+    n = max(1, math.ceil(len(all_matching) * top_pct / 100.0))
+    return all_matching[:n]
+
+
+def select_experts_by_score(
+    expert_diffs: Dict,
+    top_pct: float = 5.0,
+    return_type: str = "harmful_preferred"
+) -> List[Tuple[int, int, float]]:
+    """
+    Select the top N% of experts by balanced score: abs(diff) * harmful_pct.
+
+    This rewards experts that are both strongly differential AND frequently
+    activated on harmful prompts, ensuring the intervention actually fires
+    at inference time.
+
+    Falls back to abs(diff) if raw frequencies are unavailable (old format).
+
+    Args:
+        expert_diffs: Dictionary mapping layer -> list of entries
+        top_pct: Percentage of experts to keep (e.g. 5.0 = top 5%)
+        return_type: "harmful_preferred", "harmless_preferred", or "both"
+
+    Returns:
+        List of (layer, expert_id, diff) tuples, sorted by score descending
+    """
+    import math
+
+    all_matching = []
+    for layer_str, experts_data in expert_diffs.items():
+        layer_idx = _layer_idx(layer_str)
+        for entry in experts_data:
+            expert_id, diff, harmful_pct, harmless_pct = _parse_entry(entry)
+            if _matches_type(diff, return_type):
+                score = abs(diff) * harmful_pct if harmful_pct is not None else abs(diff)
+                all_matching.append((layer_idx, expert_id, diff, score))
+
+    all_matching.sort(key=lambda x: x[3], reverse=True)
+    n = max(1, math.ceil(len(all_matching) * top_pct / 100.0))
+    return [(layer, eid, diff) for layer, eid, diff, _ in all_matching[:n]]
 
 
 def print_expert_selection_summary(selected_experts: List[Tuple[int, int, float]]):
@@ -103,15 +187,22 @@ def print_expert_selection_summary(selected_experts: List[Tuple[int, int, float]
 def get_candidate_experts(
     threshold: float = 15.0,
     expert_type: str = "harmful_preferred",
-    expert_diffs_path: str = "expert_explore/oss_expert_diffs.json"
+    expert_diffs_path: str = "expert_explore/oss_expert_diffs.json",
+    selection_mode: str = "threshold",
+    top_pct: float = 5.0,
 ) -> List[Tuple[int, int, float]]:
     """
-    Main function to load and select candidate experts.
+    Load and select candidate experts.
 
     Args:
-        threshold: Minimum absolute difference (percentage points)
+        threshold: Minimum absolute difference (percentage points). Used by 'threshold' mode.
         expert_type: "harmful_preferred", "harmless_preferred", or "both"
         expert_diffs_path: Path to expert diffs JSON file
+        selection_mode: One of:
+            "threshold" - keep all experts with abs(diff) >= threshold (default)
+            "top_pct"   - keep top N% by abs(diff)
+            "score"     - keep top N% by abs(diff) * harmful_pct
+        top_pct: Percentage for top_pct and score modes (e.g. 5.0 = top 5%)
 
     Returns:
         List of (layer, expert_id, diff) tuples
@@ -119,13 +210,15 @@ def get_candidate_experts(
     print(f"Loading expert diffs from {expert_diffs_path}...")
     expert_diffs = load_expert_diffs(expert_diffs_path)
 
-    print(f"Selecting experts with threshold={threshold}%, type={expert_type}...")
-    selected = select_experts_by_threshold(
-        expert_diffs,
-        threshold=threshold,
-        return_type=expert_type
-    )
+    if selection_mode == "top_pct":
+        print(f"Selecting top {top_pct}% of experts by abs(diff), type={expert_type}...")
+        selected = select_experts_by_top_pct(expert_diffs, top_pct=top_pct, return_type=expert_type)
+    elif selection_mode == "score":
+        print(f"Selecting top {top_pct}% of experts by score (abs(diff)*harmful_pct), type={expert_type}...")
+        selected = select_experts_by_score(expert_diffs, top_pct=top_pct, return_type=expert_type)
+    else:
+        print(f"Selecting experts with threshold={threshold}%, type={expert_type}...")
+        selected = select_experts_by_threshold(expert_diffs, threshold=threshold, return_type=expert_type)
 
     print_expert_selection_summary(selected)
-
     return selected
