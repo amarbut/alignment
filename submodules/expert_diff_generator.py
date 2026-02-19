@@ -228,7 +228,9 @@ def compute_expert_diffs(
         harmless_routing: Expert percentages for harmless prompts
 
     Returns:
-        Dictionary mapping layer names to [[expert_id, diff_percentage], ...]
+        Dictionary mapping layer names to
+        [[expert_id, diff, harmful_pct, harmless_pct], ...]
+        where diff = harmful_pct - harmless_pct (negative = harmless-preferred).
     """
     expert_diffs = {}
 
@@ -247,7 +249,7 @@ def compute_expert_diffs(
             harmful_pct = harmful_pcts.get(expert_id, 0)
             harmless_pct = harmless_pcts.get(expert_id, 0)
             diff = harmful_pct - harmless_pct
-            diffs.append([expert_id, diff])
+            diffs.append([expert_id, diff, harmful_pct, harmless_pct])
 
         expert_diffs[layer_name] = diffs
 

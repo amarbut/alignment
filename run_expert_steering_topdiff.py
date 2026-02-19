@@ -86,7 +86,7 @@ def parse_arguments():
         '--threshold',
         type=float,
         default=15.0,
-        help='Expert selection threshold (percentage points)'
+        help='Expert selection threshold in percentage points. Used with --selection_mode=threshold.'
     )
 
     parser.add_argument(
@@ -95,6 +95,27 @@ def parse_arguments():
         default='both',
         choices=['harmful_preferred', 'harmless_preferred', 'both'],
         help='Which type of experts to select'
+    )
+
+    parser.add_argument(
+        '--selection_mode',
+        type=str,
+        default='threshold',
+        choices=['threshold', 'top_pct', 'score'],
+        help=(
+            'How to select candidate experts: '
+            '"threshold" = all experts with abs(diff) >= --threshold (default); '
+            '"top_pct" = top --top_pct%% by abs(diff); '
+            '"score" = top --top_pct%% by abs(diff)*harmful_pct (balances '
+            'differential activation with raw harmful-prompt frequency)'
+        )
+    )
+
+    parser.add_argument(
+        '--top_pct',
+        type=float,
+        default=5.0,
+        help='Percentage of experts to keep in top_pct and score selection modes (default: 5.0)'
     )
 
     parser.add_argument(
@@ -1152,7 +1173,10 @@ def run_topdiff_pipeline(args):
     print("EXPERT STEERING PIPELINE (TOP-DIFF SELECTION)")
     print("="*80)
     print(f"Model: {args.model_path}")
-    print(f"Expert threshold: {args.threshold}%")
+    if args.selection_mode == 'threshold':
+        print(f"Expert selection: threshold={args.threshold}%")
+    else:
+        print(f"Expert selection: {args.selection_mode}, top {args.top_pct}%")
     if args.judge_grid:
         print(f"Mode: JUDGE GRID SEARCH over experts x positions x coeffs {args.grid_coeffs} ({args.judge_grid_n_samples} samples, {args.judge_grid_tokens} tokens)")
     elif args.unified_grid:
@@ -1243,13 +1267,21 @@ def run_topdiff_pipeline(args):
     if args.expert_diff_system_prompt is not None:
         print(f"  Using expert diffs from system_prompt='{diff_sys_prompt}' (overrides eval system_prompt='{cfg.system_prompt}')")
 
-    # Generate expert diffs if they don't exist
-    if not os.path.exists(expert_diffs_path):
-        print(f"Expert diffs not found at {expert_diffs_path}, generating...")
-        os.makedirs(expert_diffs_dir, exist_ok=True)
+    def _needs_raw_freqs(selection_mode):
+        """Return True if the selection mode requires raw harmful/harmless_pct values."""
+        return selection_mode in ('top_pct', 'score')
 
-        # If diffs use a different system prompt than the eval model, we need a
-        # temporary model_base with the correct tokenization/system prompt
+    def _diffs_have_raw_freqs(path):
+        """Check whether the saved diffs file contains raw frequency columns."""
+        import json as _json
+        with open(path) as f:
+            data = _json.load(f)
+        diffs = data.get('expert_diffs', data)
+        first_layer = next(iter(diffs.values()))
+        return len(first_layer[0]) >= 4
+
+    def _generate_diffs():
+        os.makedirs(expert_diffs_dir, exist_ok=True)
         if args.expert_diff_system_prompt is not None and args.expert_diff_system_prompt != cfg.system_prompt:
             print(f"  Constructing temporary model with system_prompt='{diff_sys_prompt}' for diff generation...")
             diff_model_base = construct_model_base(args.model_path, system_prompt=diff_sys_prompt)
@@ -1257,7 +1289,6 @@ def run_topdiff_pipeline(args):
         else:
             diff_model_base = model_base
             diff_model_card = model_card
-
         diff_model_card.generate_expert_diffs(
             harmful_dataset_path="dataset/splits/harmful_train.json",
             harmless_dataset_path="dataset/splits/harmless_train.json",
@@ -1266,10 +1297,21 @@ def run_topdiff_pipeline(args):
         )
         print(f"Expert diffs saved to {expert_diffs_path}")
 
+    # Generate expert diffs if missing or in wrong format for the selection mode
+    if not os.path.exists(expert_diffs_path):
+        print(f"Expert diffs not found at {expert_diffs_path}, generating...")
+        _generate_diffs()
+    elif _needs_raw_freqs(args.selection_mode) and not _diffs_have_raw_freqs(expert_diffs_path):
+        print(f"Expert diffs at {expert_diffs_path} are in old format (no raw frequencies).")
+        print(f"Selection mode '{args.selection_mode}' requires raw harmful/harmless frequencies — regenerating...")
+        _generate_diffs()
+
     candidate_experts = get_candidate_experts(
         threshold=args.threshold,
         expert_type=args.expert_type,
-        expert_diffs_path=expert_diffs_path
+        expert_diffs_path=expert_diffs_path,
+        selection_mode=args.selection_mode,
+        top_pct=args.top_pct,
     )
 
     # For unified_grid or judge_grid, use ALL experts above threshold
