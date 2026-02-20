@@ -799,14 +799,15 @@ def run_unified_grid_search(
 
 def run_judge_grid_search(
     model_base, model_card, expert_data, candidate_experts, expert_ranks,
-    harmful_val, normalize_mode, grid_coeffs,
+    harmful_val, harmless_val, normalize_mode, grid_coeffs,
     max_new_tokens=25, n_samples=25, batch_size=32,
-    output_dir=None
+    output_dir=None, kl_threshold=None
 ):
     """
     Two-stage judge-based grid search over (expert, position, coeff).
 
-    Stage 1: Fast forward-pass refusal scores over all combos. Keeps the top
+    Stage 1: Fast forward-pass refusal scores + KL-div over all combos. Combos
+    that fail the KL filter are excluded. From the passing combos, keeps the top
     max(ceil(total * 0.05), 15) candidates by lowest refusal score.
 
     Stage 2: Generate short completions and run the OpenAI judge only on the
@@ -841,11 +842,22 @@ def run_judge_grid_search(
     print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
 
     # -------------------------------------------------------------------------
-    # Stage 1: fast refusal score sweep
+    # Stage 1: fast refusal score + KL-div sweep
     # -------------------------------------------------------------------------
-    print(f"\n  --- Stage 1: Refusal score sweep ---")
+    print(f"\n  --- Stage 1: Refusal score + KL-div sweep ---")
 
-    # Baseline refusal score
+    # KL threshold
+    if kl_threshold is None:
+        if hasattr(model_card, 'get_expert_steering_thresholds'):
+            kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
+        else:
+            kl_threshold = 1.0
+    print(f"  KL threshold: {kl_threshold}")
+
+    # Extract harmless instructions for KL computation
+    harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
+
+    # Baseline refusal score and harmless logits
     baseline_scores = get_refusal_scores(
         model_base.model, harmful_val_instructions,
         model_base.tokenize_instructions_fn, model_base.refusal_toks,
@@ -856,8 +868,19 @@ def run_judge_grid_search(
     baseline_mean = baseline_scores.mean().item()
     print(f"  Baseline refusal score: {baseline_mean:.4f}")
 
+    print(f"  Collecting baseline harmless logits...")
+    baseline_harmless_logits = get_last_position_logits(
+        model=model_base.model,
+        tokenizer=model_base.tokenizer,
+        instructions=harmless_val_instructions,
+        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+        fwd_pre_hooks=[],
+        fwd_hooks=[],
+        batch_size=batch_size
+    )
+
     stage1_results = []
-    with tqdm(total=total, desc="  Refusal score sweep") as pbar:
+    with tqdm(total=total, desc="  Stage 1 sweep") as pbar:
         for rank in expert_ranks:
             layer, expert_id, diff_pct = candidate_experts[rank - 1]
             mean_diff, activation_rms = expert_data[rank]
@@ -884,14 +907,31 @@ def run_judge_grid_search(
                         coeff=-coeff,
                         model_card=model_card
                     )
+                    fwd_hooks = [(mlp_module, hook_fn)]
+
                     scores = get_refusal_scores(
                         model_base.model, harmful_val_instructions,
                         model_base.tokenize_instructions_fn, model_base.refusal_toks,
-                        fwd_hooks=[(mlp_module, hook_fn)], batch_size=batch_size,
+                        fwd_hooks=fwd_hooks, batch_size=batch_size,
                         tokenizer=model_base.tokenizer,
                         refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
                     )
                     mean_score = scores.mean().item()
+
+                    intervention_logits = get_last_position_logits(
+                        model=model_base.model,
+                        tokenizer=model_base.tokenizer,
+                        instructions=harmless_val_instructions,
+                        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                        fwd_pre_hooks=[],
+                        fwd_hooks=fwd_hooks,
+                        batch_size=batch_size
+                    )
+                    kl_div = kl_div_fn(
+                        baseline_harmless_logits, intervention_logits, mask=None
+                    ).mean(dim=0).item()
+
+                    passed_kl = kl_div <= kl_threshold
 
                     stage1_results.append({
                         "rank": rank,
@@ -902,19 +942,32 @@ def run_judge_grid_search(
                         "coeff": coeff,
                         "refusal_score": mean_score,
                         "refusal_reduction": baseline_mean - mean_score,
+                        "kl_div": kl_div,
+                        "passed_kl": passed_kl,
                     })
                     pbar.update(1)
-                    pbar.set_postfix_str(f"score={mean_score:.3f}")
+                    pbar.set_postfix_str(f"score={mean_score:.3f} kl={kl_div:.3f}{'✓' if passed_kl else '✗'}")
 
-    # Sort by refusal score ascending (lowest = most suppression)
-    stage1_results.sort(key=lambda x: x["refusal_score"])
-    candidates = stage1_results[:n_judge]
+    # Filter by KL, then sort survivors by refusal score
+    passing = [r for r in stage1_results if r["passed_kl"]]
+    failing = [r for r in stage1_results if not r["passed_kl"]]
+    passing.sort(key=lambda x: x["refusal_score"])
 
-    print(f"\n  Stage 1 top {n_judge} candidates (by refusal score):")
-    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
-    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
+    print(f"\n  Stage 1: {len(passing)} passed KL filter, {len(failing)} excluded")
+
+    if not passing:
+        print(f"  WARNING: No combos passed KL filter (threshold={kl_threshold}). "
+              f"Falling back to lowest-KL combos.")
+        stage1_results.sort(key=lambda x: x["kl_div"])
+        passing = stage1_results[:n_judge]
+
+    candidates = passing[:n_judge]
+
+    print(f"\n  Stage 1 top {len(candidates)} candidates (passed KL, sorted by refusal score):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>8}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*8}")
     for r in candidates:
-        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} {r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} {r['kl_div']:>8.4f}")
 
     # -------------------------------------------------------------------------
     # Stage 2: OpenAI judge on surviving candidates
@@ -1393,6 +1446,7 @@ def run_topdiff_pipeline(args):
                 candidate_experts=candidate_experts,
                 expert_ranks=expert_ranks,
                 harmful_val=harmful_val,
+                harmless_val=harmless_val,
                 normalize_mode=args.normalize,
                 grid_coeffs=args.grid_coeffs,
                 max_new_tokens=args.judge_grid_tokens,
