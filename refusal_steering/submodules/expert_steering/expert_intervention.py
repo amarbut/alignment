@@ -247,3 +247,183 @@ def get_multi_expert_weighted_intervention_hooks(
 
     fwd_pre_hooks = []
     return fwd_pre_hooks, fwd_hooks
+
+
+# =============================================================================
+# Method 1: Unweighted expert steering hooks
+# =============================================================================
+
+def get_expert_unweighted_activation_addition_hook(
+    direction: Float[Tensor, "d_model"],
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
+):
+    """
+    Create hook that adds direction WITHOUT weighting by expert's routing probability.
+
+    Unlike the weighted version, this simply adds coeff * direction to the MLP output
+    broadcast across batch and sequence dimensions.
+
+    Args:
+        direction: Steering direction to add [d_model]
+        coeff: Coefficient for steering strength (positive or negative)
+        model_card: Optional ModelCard for output parsing
+
+    Returns:
+        Hook function
+    """
+    def hook_fn(module, input, output):
+        # Parse output using model card if available
+        if model_card is not None:
+            mlp_output, router_logits = model_card.parse_mlp_output(output)
+        else:
+            if not isinstance(output, tuple) or len(output) < 2:
+                return output
+            mlp_output, router_logits = output[0], output[1]
+
+        if router_logits is None:
+            return output
+
+        # Add direction directly (broadcast across batch and seq dimensions)
+        modified_output = mlp_output + coeff * direction.to(mlp_output.device, mlp_output.dtype)
+
+        # Wrap output
+        if model_card is not None:
+            return model_card.wrap_mlp_output(modified_output, router_logits)
+        else:
+            return (modified_output, router_logits)
+
+    return hook_fn
+
+
+def get_expert_unweighted_intervention_hooks(
+    model_base,
+    layer_idx: int,
+    expert_id: int,
+    direction: Float[Tensor, "d_model"],
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
+) -> Tuple[list, list]:
+    """
+    Get hooks for unweighted expert activation addition intervention.
+
+    Same interface as get_expert_weighted_intervention_hooks but uses unweighted hook.
+    expert_id is accepted for API compatibility but not used in the hook itself.
+
+    Returns:
+        (fwd_pre_hooks, fwd_hooks) tuple
+    """
+    if model_card is None:
+        from model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
+    mlp_module = model_card.get_mlp_module(layer_idx)
+
+    hook_fn = get_expert_unweighted_activation_addition_hook(
+        direction=direction,
+        coeff=coeff,
+        model_card=model_card
+    )
+
+    fwd_pre_hooks = []
+    fwd_hooks = [(mlp_module, hook_fn)]
+
+    return fwd_pre_hooks, fwd_hooks
+
+
+# =============================================================================
+# Method 2: All-expert weighted steering hooks
+# =============================================================================
+
+def get_all_expert_weighted_activation_addition_hook(
+    directions_for_layer: Float[Tensor, "n_experts d_model"],
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
+):
+    """
+    Create hook that applies weighted sum of ALL expert steering vectors.
+
+    For each token, reads router probabilities and computes:
+        modification = router_probs @ directions_for_layer
+    Then adds coeff * modification to MLP output.
+
+    Args:
+        directions_for_layer: Steering directions for all experts [n_experts, d_model]
+        coeff: Coefficient for steering strength
+        model_card: Optional ModelCard for output parsing
+
+    Returns:
+        Hook function
+    """
+    def hook_fn(module, input, output):
+        # Parse output
+        if model_card is not None:
+            mlp_output, router_logits = model_card.parse_mlp_output(output)
+        else:
+            if not isinstance(output, tuple) or len(output) < 2:
+                return output
+            mlp_output, router_logits = output[0], output[1]
+
+        if router_logits is None:
+            return output
+
+        batch_size, seq_len, d_model = mlp_output.shape
+
+        # Get routing probabilities: [batch*seq, n_experts]
+        router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
+
+        # Compute weighted sum: [batch*seq, n_experts] @ [n_experts, d_model] -> [batch*seq, d_model]
+        dirs = directions_for_layer.to(mlp_output.device, mlp_output.dtype)
+        modification = router_probs @ dirs  # [batch*seq, d_model]
+
+        # Reshape to [batch, seq, d_model]
+        modification = modification.view(batch_size, seq_len, d_model)
+
+        # Add to MLP output
+        modified_output = mlp_output + coeff * modification
+
+        # Wrap output
+        if model_card is not None:
+            return model_card.wrap_mlp_output(modified_output, router_logits)
+        else:
+            return (modified_output, router_logits)
+
+    return hook_fn
+
+
+def get_all_expert_weighted_intervention_hooks(
+    model_base,
+    layer_idx: int,
+    directions_for_layer: Float[Tensor, "n_experts d_model"],
+    coeff: float = 1.0,
+    model_card: Optional["ModelCard"] = None
+) -> Tuple[list, list]:
+    """
+    Get hooks for all-expert weighted activation addition intervention.
+
+    Args:
+        model_base: The model
+        layer_idx: Which layer to intervene at
+        directions_for_layer: Steering directions for all experts at this layer [n_experts, d_model]
+        coeff: Coefficient (positive to enhance, negative to suppress)
+        model_card: Optional ModelCard (created if not provided)
+
+    Returns:
+        (fwd_pre_hooks, fwd_hooks) tuple
+    """
+    if model_card is None:
+        from model_utils.model_card_factory import create_model_card
+        model_card = create_model_card(model_base)
+
+    mlp_module = model_card.get_mlp_module(layer_idx)
+
+    hook_fn = get_all_expert_weighted_activation_addition_hook(
+        directions_for_layer=directions_for_layer,
+        coeff=coeff,
+        model_card=model_card
+    )
+
+    fwd_pre_hooks = []
+    fwd_hooks = [(mlp_module, hook_fn)]
+
+    return fwd_pre_hooks, fwd_hooks
