@@ -13,7 +13,6 @@ from pathlib import Path
 CACHE_LOCATIONS = {
     'oss': '/media/volume/align_2/hf',
     'unsloth': '/media/volume/align_2/hf',
-    'deepseek': '/media/volume/align_2/hf',
     'mixtral': '/media/volume/mixtral/hf',
     'olmoe': '/media/volume/align_2/hf',
 }
