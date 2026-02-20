@@ -832,11 +832,11 @@ def run_judge_grid_search(
 
     n_experts = len(expert_ranks)
     total = n_experts * len(positions) * len(grid_coeffs)
-    n_judge = max(math.ceil(total * 0.05), 15)
+    n_judge = max(math.ceil(total * 0.025), 15)
 
     print(f"\n  Judge grid search (2-stage): {n_experts} experts x {len(positions)} positions x {len(grid_coeffs)} coeffs = {total} combos")
     print(f"  Stage 1: refusal score sweep (all {total} combos)")
-    print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(5, round(100*n_judge/total))}%) candidates")
+    print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(2.55, round(100*n_judge/total))}%) candidates")
     print(f"  Positions: {positions}, Coeffs: {grid_coeffs}")
     print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
 
@@ -1269,7 +1269,7 @@ def run_topdiff_pipeline(args):
 
     def _needs_raw_freqs(selection_mode):
         """Return True if the selection mode requires raw harmful/harmless_pct values."""
-        return selection_mode in ('top_pct', 'score')
+        return selection_mode == 'score'
 
     def _diffs_have_raw_freqs(path):
         """Check whether the saved diffs file contains raw frequency columns."""
@@ -1314,10 +1314,11 @@ def run_topdiff_pipeline(args):
         top_pct=args.top_pct,
     )
 
-    # For unified_grid or judge_grid, use ALL experts above threshold
-    if args.unified_grid or args.judge_grid:
+    # For unified_grid or judge_grid, or any non-threshold selection mode,
+    # use ALL selected candidates (the selection already determined the set)
+    if args.unified_grid or args.judge_grid or args.selection_mode != 'threshold':
         expert_ranks = list(range(1, len(candidate_experts) + 1))
-        print(f"\nGrid search: using all {len(candidate_experts)} experts above {args.threshold}% threshold")
+        print(f"\nUsing all {len(candidate_experts)} selected experts (selection_mode={args.selection_mode})")
 
     max_rank = max(expert_ranks)
     if max_rank > len(candidate_experts):
