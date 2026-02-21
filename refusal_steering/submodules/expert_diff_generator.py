@@ -389,7 +389,8 @@ def generate_expert_diffs_for_model(
 
     all_diffs = []
     for layer_name, diffs in expert_diffs.items():
-        for expert_id, diff_pct in diffs:
+        for entry in diffs:
+            expert_id, diff_pct = entry[0], entry[1]
             all_diffs.append((layer_name, expert_id, diff_pct))
 
     # Sort by absolute difference
