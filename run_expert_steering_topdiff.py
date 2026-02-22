@@ -1238,7 +1238,10 @@ def run_topdiff_pipeline(args):
         print(f"Mode: GRID SEARCH over positions x coeffs {args.grid_coeffs}")
     else:
         print(f"Coefficient: {args.coeff}")
-    print(f"Expert rank(s): {expert_ranks}")
+    if args.unified_grid or args.judge_grid or args.selection_mode != 'threshold':
+        print(f"Expert rank(s): all selected (override)")
+    else:
+        print(f"Expert rank(s): {expert_ranks}")
     print(f"Position(s): {'grid_search' if args.grid_search else positions}")
     print(f"Normalize mode: {args.normalize}")
     print(f"Expert type: {args.expert_type}")
