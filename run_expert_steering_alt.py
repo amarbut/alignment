@@ -51,7 +51,7 @@ from pathlib import Path
 from dataset.load_dataset import load_dataset_split, load_dataset
 from config import Config
 from model_utils.model_factory_moe import construct_model_base
-from submodules.arditi.select_direction import get_refusal_scores
+from submodules.arditi.select_direction import get_refusal_scores, get_last_position_logits, kl_div_fn
 from submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from submodules.expert_steering.expert_selection import get_candidate_experts
@@ -789,15 +789,17 @@ def run_unweighted_pipeline(args, cfg, model_base, model_card,
 def run_allex_judge_grid(
     model_base, model_card, all_layer_directions,
     harmful_val,  # list of dicts (instructions_only=False)
+    harmless_val=None,  # list of dicts or strings for KL filter
     grid_coeffs=None,
     max_new_tokens=25, n_samples=25, batch_size=32,
-    output_dir=None
+    output_dir=None, kl_threshold=None
 ):
     """
     Two-stage judge-based grid search over (layer, position, coeff) for allex.
 
-    Stage 1: Fast forward-pass refusal scores over all (layer, position, coeff) combos.
-             Keeps the top max(ceil(total * 0.025), 15) candidates.
+    Stage 1: Fast forward-pass refusal scores + KL-div over all combos. Combos
+             that fail the KL filter are excluded. From the passing combos, keeps
+             the top max(ceil(total * 0.025), 15) candidates by lowest refusal score.
 
     Stage 2: Generate short completions and run the OpenAI judge only on the
              surviving candidates.
@@ -822,20 +824,32 @@ def run_allex_judge_grid(
     # Subsample for judge stage (dicts needed for generate_completions)
     sample = random.sample(harmful_val, min(n_samples, len(harmful_val)))
 
+    # Resolve KL threshold
+    use_kl = harmless_val is not None
+    if use_kl:
+        if kl_threshold is None:
+            if hasattr(model_card, 'get_expert_steering_thresholds'):
+                kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
+            else:
+                kl_threshold = 1.0
+        harmless_val_instructions = _to_instructions(harmless_val)
+
     total = len(layer_indices) * len(positions) * len(grid_coeffs)
     n_judge = max(math.ceil(total * 0.025), 15)
 
     print(f"\n  Judge grid (2-stage): {len(layer_indices)} layers x {len(positions)} pos x "
           f"{len(grid_coeffs)} coeffs = {total} combos")
-    print(f"  Stage 1: refusal score sweep (all {total} combos)")
+    print(f"  Stage 1: refusal score + {'KL-div ' if use_kl else ''}sweep (all {total} combos)")
     print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(2.5, round(100*n_judge/total, 1))}%) candidates")
     print(f"  Positions: {positions}, Coeffs: {grid_coeffs}")
     print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
+    if use_kl:
+        print(f"  KL threshold: {kl_threshold}")
 
     # -------------------------------------------------------------------------
-    # Stage 1: fast refusal score sweep
+    # Stage 1: fast refusal score + optional KL-div sweep
     # -------------------------------------------------------------------------
-    print(f"\n  --- Stage 1: Refusal score sweep ---")
+    print(f"\n  --- Stage 1: Refusal score{' + KL-div' if use_kl else ''} sweep ---")
 
     baseline_scores = get_refusal_scores(
         model_base.model, harmful_val_instructions,
@@ -847,8 +861,21 @@ def run_allex_judge_grid(
     baseline_mean = baseline_scores.mean().item()
     print(f"  Baseline refusal score: {baseline_mean:.4f}")
 
+    baseline_harmless_logits = None
+    if use_kl:
+        print(f"  Collecting baseline harmless logits...")
+        baseline_harmless_logits = get_last_position_logits(
+            model=model_base.model,
+            tokenizer=model_base.tokenizer,
+            instructions=harmless_val_instructions,
+            tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+            fwd_pre_hooks=[],
+            fwd_hooks=[],
+            batch_size=batch_size
+        )
+
     stage1_results = []
-    with tqdm(total=total, desc="  Refusal score sweep") as pbar:
+    with tqdm(total=total, desc="  Stage 1 sweep") as pbar:
         for layer_idx in layer_indices:
             dirs = all_layer_directions[layer_idx]  # [n_experts, n_pos, d_model]
             mlp_module = model_card.get_mlp_module(layer_idx)
@@ -862,14 +889,33 @@ def run_allex_judge_grid(
                         coeff=-coeff,
                         model_card=model_card
                     )
+                    fwd_hooks = [(mlp_module, hook)]
+
                     scores = get_refusal_scores(
                         model_base.model, harmful_val_instructions,
                         model_base.tokenize_instructions_fn, model_base.refusal_toks,
-                        fwd_hooks=[(mlp_module, hook)], batch_size=batch_size,
+                        fwd_hooks=fwd_hooks, batch_size=batch_size,
                         tokenizer=model_base.tokenizer,
                         refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
                     )
                     mean_score = scores.mean().item()
+
+                    kl_div = None
+                    passed_kl = True
+                    if use_kl:
+                        intervention_logits = get_last_position_logits(
+                            model=model_base.model,
+                            tokenizer=model_base.tokenizer,
+                            instructions=harmless_val_instructions,
+                            tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                            fwd_pre_hooks=[],
+                            fwd_hooks=fwd_hooks,
+                            batch_size=batch_size
+                        )
+                        kl_div = kl_div_fn(
+                            baseline_harmless_logits, intervention_logits, mask=None
+                        ).mean(dim=0).item()
+                        passed_kl = kl_div <= kl_threshold
 
                     stage1_results.append({
                         "layer": layer_idx,
@@ -877,20 +923,43 @@ def run_allex_judge_grid(
                         "coeff": coeff,
                         "refusal_score": mean_score,
                         "refusal_reduction": baseline_mean - mean_score,
+                        "kl_div": kl_div,
+                        "passed_kl": passed_kl,
                     })
                     pbar.update(1)
-                    pbar.set_postfix_str(f"score={mean_score:.3f}")
+                    status = f"score={mean_score:.3f}"
+                    if use_kl:
+                        status += f" kl={kl_div:.3f}{'✓' if passed_kl else '✗'}"
+                    pbar.set_postfix_str(status)
 
-    # Sort by refusal score ascending (lowest = most suppression)
-    stage1_results.sort(key=lambda x: x["refusal_score"])
-    candidates = stage1_results[:n_judge]
+    # Filter by KL, sort survivors by refusal score, fall back if nothing passes
+    if use_kl:
+        passing = [r for r in stage1_results if r["passed_kl"]]
+        passing.sort(key=lambda x: x["refusal_score"])
+        print(f"\n  Stage 1: {len(passing)} passed KL filter (threshold={kl_threshold}), "
+              f"{len(stage1_results) - len(passing)} excluded")
+        if not passing:
+            print(f"  WARNING: No combos passed KL filter. Falling back to lowest-KL combos.")
+            stage1_results.sort(key=lambda x: x["kl_div"])
+            passing = stage1_results[:n_judge]
+        candidates = passing[:n_judge]
+    else:
+        stage1_results.sort(key=lambda x: x["refusal_score"])
+        candidates = stage1_results[:n_judge]
 
-    print(f"\n  Stage 1 top {n_judge} candidates (by refusal score):")
-    print(f"  {'Layer':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
-    print(f"  {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
-    for r in candidates:
-        print(f"  {r['layer']:>7} {r['position']:>5} {r['coeff']:>8.1f} "
-              f"{r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
+    print(f"\n  Stage 1 top {len(candidates)} candidates (passed KL filter, sorted by refusal score):")
+    if use_kl:
+        print(f"  {'Layer':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>8}")
+        print(f"  {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*8}")
+        for r in candidates:
+            print(f"  {r['layer']:>7} {r['position']:>5} {r['coeff']:>8.1f} "
+                  f"{r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} {r['kl_div']:>8.4f}")
+    else:
+        print(f"  {'Layer':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10}")
+        print(f"  {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10}")
+        for r in candidates:
+            print(f"  {r['layer']:>7} {r['position']:>5} {r['coeff']:>8.1f} "
+                  f"{r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f}")
 
     # -------------------------------------------------------------------------
     # Stage 2: OpenAI judge on surviving candidates
@@ -1055,6 +1124,7 @@ def run_allex_pipeline(args, cfg, model_base, model_card,
         best_layer, best_position, best_coeff, all_results = run_allex_judge_grid(
             model_base, model_card, all_layer_directions,
             harmful_val,  # dicts
+            harmless_val=harmless_val,
             grid_coeffs=args.grid_coeffs,
             max_new_tokens=args.judge_grid_tokens,
             n_samples=args.judge_grid_n_samples,
