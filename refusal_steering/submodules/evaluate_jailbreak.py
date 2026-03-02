@@ -286,7 +286,6 @@ Example response format:
             if idx < len(prompts) - 1:
                 time.sleep(delay_between_requests)
 
-    print(f"  Judge results: {counts}")
     return classifications
 
 def evaluate_jailbreak(
@@ -294,7 +293,8 @@ def evaluate_jailbreak(
     completions_path: str=None,
     methodologies: List[str]=["substring_matching"],
     evaluation_path: str=None,
-    openai_delay: float=1.0
+    openai_delay: float=1.0,
+    verbose: bool=True,
 ):
     """
     Args:
@@ -327,7 +327,8 @@ def evaluate_jailbreak(
         evaluation["substring_matching_success_rate"] = np.mean([completion["is_jailbreak_substring_matching"] for completion in completions])
         evaluation["substring_matching_per_category"] = category_to_asr
 
-        print(f"Average Substring Matching ASR: {evaluation['substring_matching_success_rate']}")
+        if verbose:
+            print(f"Average Substring Matching ASR: {evaluation['substring_matching_success_rate']}")
 
     if "llamaguard2" in methodologies:
 
@@ -345,7 +346,8 @@ def evaluate_jailbreak(
         evaluation["llamaguard2_success_rate"] = np.mean(classifications)
         evaluation["llamaguard2_per_category"] = category_to_asr
 
-        print(f"Average LlamaGuard2 ASR: {evaluation['llamaguard2_success_rate']}")
+        if verbose:
+            print(f"Average LlamaGuard2 ASR: {evaluation['llamaguard2_success_rate']}")
 
     if "harmbench" in methodologies: 
 
@@ -363,7 +365,8 @@ def evaluate_jailbreak(
         evaluation["harmbench_success_rate"] = np.mean(classifications)
         evaluation["harmbench_per_category"] = category_to_asr
 
-        print(f"Average HarmBench ASR: {evaluation['harmbench_success_rate']}")
+        if verbose:
+            print(f"Average HarmBench ASR: {evaluation['harmbench_success_rate']}")
 
     if "openai" in methodologies:
 
@@ -406,13 +409,15 @@ def evaluate_jailbreak(
         evaluation["openai_category_counts"] = category_counts
         evaluation["openai_overall_counts"] = overall_counts
 
-        print(f"Average OpenAI ASR: {evaluation['openai_success_rate']}")
-        print(f"OpenAI Overall Counts: {overall_counts}")
+        if verbose:
+            print(f"Average OpenAI ASR: {evaluation['openai_success_rate']}")
+            print(f"OpenAI Overall Counts: {overall_counts}")
 
     evaluation["completions"] = completions
 
     with open(evaluation_path, "w") as f:
         json.dump(evaluation, f, indent=4)
+    if verbose:
         print(f"Evaluation results saved at {evaluation_path}")
 
     return evaluation

@@ -159,7 +159,6 @@ def get_expert_activations(
                         dtype=dtype, device=model.device)
 
     # Force the expert
-    print(f"  Forcing Layer {layer_idx}, Expert {expert_id}...")
     original_bias, model_card = force_expert_via_bias(
         model_base, layer_idx, expert_id, model_card=model_card
     )
@@ -196,7 +195,6 @@ def get_expert_activations(
     finally:
         # Always restore original bias
         restore_router_bias(model_base, layer_idx, original_bias, model_card=model_card)
-        print(f"  Restored router bias for Layer {layer_idx}")
 
     # Return shape: [n_positions, n_instructions, d_model]
     return cache[0]
@@ -257,15 +255,10 @@ def get_expert_mean_diff(
         from model_utils.model_card_factory import create_model_card
         model_card = create_model_card(model_base)
 
-    print(f"\nComputing mean activations for Layer {layer_idx}, Expert {expert_id}...")
-
-    print("  Processing harmful instructions...")
     mean_harmful = get_mean_expert_activations(
         model_base, harmful_instructions, layer_idx, expert_id,
         batch_size=batch_size, model_card=model_card
     )
-
-    print("  Processing harmless instructions...")
     mean_harmless = get_mean_expert_activations(
         model_base, harmless_instructions, layer_idx, expert_id,
         batch_size=batch_size, model_card=model_card
@@ -276,9 +269,5 @@ def get_expert_mean_diff(
     # Compute per-position activation RMS: element-wise RMS averaged over harmful/harmless
     # Shape: [n_positions]
     activation_rms = ((mean_harmful**2 + mean_harmless**2) / 2).mean(dim=-1).sqrt()
-
-    print(f"  Mean diff shape: {mean_diff.shape}")
-    print(f"  Mean diff magnitude: {mean_diff.norm(dim=-1).mean().item():.4f}")
-    print(f"  Activation RMS per position: {activation_rms.tolist()}")
 
     return mean_diff, activation_rms

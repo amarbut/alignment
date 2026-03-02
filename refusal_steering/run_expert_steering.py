@@ -323,67 +323,88 @@ def filter_data(cfg, model_base, harmful_train, harmless_train):
 
 
 # =============================================================================
-# Direction generation
+# Direction cache — shared across all modes
+# =============================================================================
+#
+# Cache layout:
+#   runs/{model}/expert_directions/sys_prompt_{sp}/layer_{L}.pt
+#     → dict {expert_id (int): tensor[n_pos, d_model]}
+#
+# Any mode that needs directions for a given (layer, expert) pair will hit the
+# same file. If the expert is already present it is loaded; if not it is
+# computed and the file is updated in-place. This means running threshold mode
+# first and then allex will reuse the directions already cached.
 # =============================================================================
 
-def generate_all_expert_directions(
+def _get_shared_cache_dir(base_model_name, system_prompt):
+    """Return the mode-agnostic direction cache directory."""
+    return os.path.join("runs", base_model_name, "expert_directions",
+                        f"sys_prompt_{system_prompt}")
+
+
+def _load_or_compute_layer_directions(
+    layer_idx, expert_ids_needed,
     model_base, harmful_train, harmless_train,
-    model_card, artifact_dir, batch_size=32
+    batch_size, cache_dir, skip_generate=False
 ):
     """
-    Generate mean difference vectors for ALL experts at ALL MoE layers.
+    Load cached expert directions for a layer, computing any that are missing.
 
-    Saves per-layer to enable incremental progress. Returns:
-      {layer_idx: tensor[n_experts, n_pos, d_model]}
+    Cache file: {cache_dir}/layer_{layer_idx}.pt
+      → dict {expert_id (int): tensor[n_pos, d_model]}
+
+    The file is updated (not overwritten) whenever new experts are computed,
+    so multiple runs accumulate into a single growing cache.
+
+    Args:
+        expert_ids_needed: list of expert_id ints required by the caller
+        skip_generate: if True, raise RuntimeError instead of computing
+                       any expert that is not already cached
+
+    Returns:
+        dict {expert_id: tensor[n_pos, d_model]}
+        (contains at minimum all expert_ids_needed)
     """
-    os.makedirs(artifact_dir, exist_ok=True)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"layer_{layer_idx}.pt")
 
-    num_layers = model_card.get_num_layers()
-    all_layer_directions = {}
+    # Load existing cache
+    cached = {}
+    if os.path.exists(cache_path):
+        cached = torch.load(cache_path, map_location='cpu')
 
-    print("\n" + "="*80)
-    print("GENERATING ALL-EXPERT DIRECTIONS")
-    print("="*80)
+    missing = [eid for eid in expert_ids_needed if eid not in cached]
 
-    for layer_idx in range(num_layers):
-        if not model_card.is_moe_layer(layer_idx):
-            continue
+    if missing and skip_generate:
+        raise RuntimeError(
+            f"Layer {layer_idx}: {len(missing)} expert direction(s) not in cache "
+            f"and --skip_generate is set. "
+            f"Missing expert IDs: {missing[:5]}{'...' if len(missing) > 5 else ''}\n"
+            f"  Cache path: {cache_path}"
+        )
 
-        layer_path = os.path.join(artifact_dir, f"layer_{layer_idx}_all_experts.pt")
+    if not missing:
+        if expert_ids_needed:
+            print(f"  [Layer {layer_idx}] {len(expert_ids_needed)} direction(s) loaded from cache")
+        return cached
 
-        if os.path.exists(layer_path):
-            print(f"\n[Layer {layer_idx}] Loading from cache")
-            layer_dirs = torch.load(layer_path, map_location='cpu')
-            all_layer_directions[layer_idx] = layer_dirs
-            continue
-
-        n_experts = model_card.get_num_experts(layer_idx)
-        print(f"\n[Layer {layer_idx}] Generating directions for {n_experts} experts")
-
-        expert_diffs = []
-        for expert_id in range(n_experts):
-            print(f"  Expert {expert_id}/{n_experts-1}")
+    # Compute missing experts and update the cache file
+    from tqdm import tqdm
+    n_existing = len(cached)
+    desc = f"  Layer {layer_idx:>3} ({n_existing} cached + {len(missing)} new)"
+    with tqdm(missing, desc=desc, unit="expert", leave=True) as pbar:
+        for expert_id in pbar:
             mean_diff, _ = get_expert_mean_diff(
                 model_base, harmful_train, harmless_train,
                 layer_idx, expert_id, batch_size=batch_size
             )
-            expert_diffs.append(mean_diff)  # [n_pos, d_model]
+            cached[expert_id] = mean_diff.cpu()
+            torch.cuda.empty_cache()
 
-        # Stack: [n_experts, n_pos, d_model]
-        layer_dirs = torch.stack(expert_diffs, dim=0).cpu()
-        all_layer_directions[layer_idx] = layer_dirs
+    torch.save(cached, cache_path)
+    print(f"  [Layer {layer_idx}] Cache updated: {len(cached)} total experts → {cache_path}")
 
-        torch.save(layer_dirs, layer_path)
-        print(f"  Saved layer {layer_idx} directions to: {layer_path}")
-
-        del expert_diffs
-        torch.cuda.empty_cache()
-
-    combined_path = os.path.join(artifact_dir, "all_layer_expert_directions.pt")
-    torch.save(all_layer_directions, combined_path)
-    print(f"\nSaved all layer-expert directions to: {combined_path}")
-
-    return all_layer_directions
+    return cached
 
 
 # =============================================================================
@@ -409,7 +430,7 @@ def run_grid_search(
              the surviving candidates.
 
     Args:
-        expert_data: dict of rank -> (mean_diff, activation_rms)
+        expert_data: dict of rank -> mean_diff tensor [n_pos, d_model]
         candidate_experts: list of (layer, expert_id, diff_pct) tuples
         expert_ranks: list of 1-indexed ranks to search
 
@@ -476,7 +497,7 @@ def run_grid_search(
     with tqdm(total=total, desc="  Stage 1 sweep") as pbar:
         for rank in expert_ranks:
             layer, expert_id, diff_pct = candidate_experts[rank - 1]
-            mean_diff, _ = expert_data[rank]
+            mean_diff = expert_data[rank]
 
             mlp_module = model_card.get_mlp_module(layer)
 
@@ -568,65 +589,64 @@ def run_grid_search(
     best_position = None
     best_coeff = None
 
-    for i, candidate in enumerate(candidates):
-        rank = candidate["rank"]
-        layer = candidate["layer"]
-        expert_id = candidate["expert_id"]
-        position = candidate["position"]
-        coeff = candidate["coeff"]
+    with tqdm(candidates, desc="  Stage 2 judge", unit="combo") as pbar:
+        for candidate in pbar:
+            rank = candidate["rank"]
+            layer = candidate["layer"]
+            expert_id = candidate["expert_id"]
+            position = candidate["position"]
+            coeff = candidate["coeff"]
 
-        print(f"\n  [{i+1}/{len(candidates)}] Rank {rank} L{layer} E{expert_id} "
-              f"pos={position} coeff={coeff} (refusal={candidate['refusal_score']:.4f})")
+            mean_diff = expert_data[rank]
+            direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
 
-        mean_diff, _ = expert_data[rank]
-        direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+            fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
+                model_base,
+                layer_idx=layer,
+                expert_id=expert_id,
+                direction=direction,
+                coeff=-coeff
+            )
 
-        fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
-            model_base,
-            layer_idx=layer,
-            expert_id=expert_id,
-            direction=direction,
-            coeff=-coeff
-        )
+            completions = model_base.generate_completions(
+                sample,
+                fwd_pre_hooks=fwd_pre_hooks,
+                fwd_hooks=fwd_hooks,
+                max_new_tokens=max_new_tokens,
+                batch_size=batch_size
+            )
 
-        completions = model_base.generate_completions(
-            sample,
-            fwd_pre_hooks=fwd_pre_hooks,
-            fwd_hooks=fwd_hooks,
-            max_new_tokens=max_new_tokens,
-            batch_size=batch_size
-        )
+            combo_label = f"R{rank}_L{layer}_E{expert_id}_pos{position}_c{coeff}"
+            eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
 
-        combo_label = f"R{rank}_L{layer}_E{expert_id}_pos{position}_c{coeff}"
-        eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
+            evaluation = evaluate_jailbreak(
+                completions=completions,
+                methodologies=["openai"],
+                evaluation_path=eval_path,
+                openai_delay=0.1,
+                verbose=False,
+            )
 
-        evaluation = evaluate_jailbreak(
-            completions=completions,
-            methodologies=["openai"],
-            evaluation_path=eval_path,
-            openai_delay=0.1
-        )
+            asr = evaluation.get("openai_success_rate", 0.0)
+            counts = evaluation.get("openai_overall_counts", {})
+            n_full = counts.get("full_response", 0)
+            n_refusal = counts.get("refusal", 0)
+            n_non = counts.get("non_response", 0)
 
-        asr = evaluation.get("openai_success_rate", 0.0)
-        counts = evaluation.get("openai_overall_counts", {})
-        n_full = counts.get("full_response", 0)
-        n_refusal = counts.get("refusal", 0)
-        n_non = counts.get("non_response", 0)
+            candidate.update({
+                "asr": asr,
+                "full_response": n_full,
+                "refusal_count": n_refusal,
+                "non_response": n_non,
+            })
 
-        print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
+            if asr > best_asr:
+                best_asr = asr
+                best_rank = rank
+                best_position = position
+                best_coeff = coeff
 
-        candidate.update({
-            "asr": asr,
-            "full_response": n_full,
-            "refusal_count": n_refusal,
-            "non_response": n_non,
-        })
-
-        if asr > best_asr:
-            best_asr = asr
-            best_rank = rank
-            best_position = position
-            best_coeff = coeff
+            pbar.set_postfix_str(f"best ASR={best_asr:.0%}")
 
     judged = sorted(candidates, key=lambda x: (-x.get("asr", -1), x.get("non_response", 0)))
     not_judged = stage1_results[n_judge:]
@@ -813,61 +833,60 @@ def run_allex_grid_search(
     best_position = None
     best_coeff = None
 
-    for i, candidate in enumerate(candidates):
-        layer_idx = candidate["layer"]
-        position = candidate["position"]
-        coeff = candidate["coeff"]
+    with tqdm(candidates, desc="  Stage 2 judge", unit="combo") as pbar:
+        for candidate in pbar:
+            layer_idx = candidate["layer"]
+            position = candidate["position"]
+            coeff = candidate["coeff"]
 
-        print(f"\n  [{i+1}/{len(candidates)}] L{layer_idx} pos={position} coeff={coeff} "
-              f"(refusal={candidate['refusal_score']:.4f})")
+            dirs = all_layer_directions[layer_idx]
+            dirs_at_pos = dirs[:, position, :].to(model_base.model.device, dtype=model_base.model.dtype)
 
-        dirs = all_layer_directions[layer_idx]
-        dirs_at_pos = dirs[:, position, :].to(model_base.model.device, dtype=model_base.model.dtype)
+            fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
+                model_base, layer_idx=layer_idx,
+                directions_for_layer=dirs_at_pos,
+                coeff=-coeff, model_card=model_card
+            )
 
-        fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
-            model_base, layer_idx=layer_idx,
-            directions_for_layer=dirs_at_pos,
-            coeff=-coeff, model_card=model_card
-        )
+            completions = model_base.generate_completions(
+                sample,
+                fwd_pre_hooks=fwd_pre_hooks,
+                fwd_hooks=fwd_hooks,
+                max_new_tokens=max_new_tokens,
+                batch_size=batch_size
+            )
 
-        completions = model_base.generate_completions(
-            sample,
-            fwd_pre_hooks=fwd_pre_hooks,
-            fwd_hooks=fwd_hooks,
-            max_new_tokens=max_new_tokens,
-            batch_size=batch_size
-        )
+            combo_label = f"L{layer_idx}_pos{position}_c{coeff}"
+            eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
 
-        combo_label = f"L{layer_idx}_pos{position}_c{coeff}"
-        eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
+            evaluation = evaluate_jailbreak(
+                completions=completions,
+                methodologies=["openai"],
+                evaluation_path=eval_path,
+                openai_delay=0.1,
+                verbose=False,
+            )
 
-        evaluation = evaluate_jailbreak(
-            completions=completions,
-            methodologies=["openai"],
-            evaluation_path=eval_path,
-            openai_delay=0.1
-        )
+            asr = evaluation.get("openai_success_rate", 0.0)
+            counts = evaluation.get("openai_overall_counts", {})
+            n_full = counts.get("full_response", 0)
+            n_refusal = counts.get("refusal", 0)
+            n_non = counts.get("non_response", 0)
 
-        asr = evaluation.get("openai_success_rate", 0.0)
-        counts = evaluation.get("openai_overall_counts", {})
-        n_full = counts.get("full_response", 0)
-        n_refusal = counts.get("refusal", 0)
-        n_non = counts.get("non_response", 0)
+            candidate.update({
+                "asr": asr,
+                "full_response": n_full,
+                "refusal_count": n_refusal,
+                "non_response": n_non,
+            })
 
-        print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
+            if asr > best_asr:
+                best_asr = asr
+                best_layer = layer_idx
+                best_position = position
+                best_coeff = coeff
 
-        candidate.update({
-            "asr": asr,
-            "full_response": n_full,
-            "refusal_count": n_refusal,
-            "non_response": n_non,
-        })
-
-        if asr > best_asr:
-            best_asr = asr
-            best_layer = layer_idx
-            best_position = position
-            best_coeff = coeff
+            pbar.set_postfix_str(f"best ASR={best_asr:.0%}")
 
     judged = sorted(candidates, key=lambda x: (-x.get("asr", -1), x.get("non_response", 0)))
     not_judged = stage1_results[n_judge:]
@@ -1193,35 +1212,35 @@ def run_pipeline(args):
     # Mode 2: ALLEX
     # ------------------------------------------------------------------
     if mode == "allex":
-        direction_cache_dir = os.path.join(
-            "runs", base_model_name,
-            "expert_directions",
-            f"sys_prompt_{cfg.system_prompt}",
-            "all_experts"
-        )
+        shared_cache_dir = _get_shared_cache_dir(base_model_name, cfg.system_prompt)
 
-        if not args.skip_generate:
-            all_layer_directions = generate_all_expert_directions(
-                model_base, harmful_train, harmless_train,
-                model_card,
-                artifact_dir=direction_cache_dir,
-                batch_size=args.batch_size
+        print("\n" + "="*80)
+        print("LOADING / COMPUTING ALL-EXPERT DIRECTIONS")
+        print("="*80)
+        print(f"  Cache: {shared_cache_dir}/layer_{{L}}.pt")
+
+        all_layer_directions = {}
+        num_layers = model_card.get_num_layers()
+        for layer_idx in range(num_layers):
+            if not model_card.is_moe_layer(layer_idx):
+                continue
+            n_experts = model_card.get_num_experts(layer_idx)
+            layer_cache = _load_or_compute_layer_directions(
+                layer_idx=layer_idx,
+                expert_ids_needed=list(range(n_experts)),
+                model_base=model_base,
+                harmful_train=harmful_train,
+                harmless_train=harmless_train,
+                batch_size=args.batch_size,
+                cache_dir=shared_cache_dir,
+                skip_generate=args.skip_generate,
             )
-        else:
-            print("\nSkipping generation, loading from cache...")
-            combined_path = os.path.join(direction_cache_dir, "all_layer_expert_directions.pt")
-            if os.path.exists(combined_path):
-                all_layer_directions = torch.load(combined_path, map_location='cpu')
-            else:
-                all_layer_directions = {}
-                num_layers = model_card.get_num_layers()
-                for layer_idx in range(num_layers):
-                    if not model_card.is_moe_layer(layer_idx):
-                        continue
-                    layer_path = os.path.join(direction_cache_dir, f"layer_{layer_idx}_all_experts.pt")
-                    if os.path.exists(layer_path):
-                        all_layer_directions[layer_idx] = torch.load(layer_path, map_location='cpu')
-            print(f"Loaded directions for {len(all_layer_directions)} MoE layers")
+            # Stack in expert-id order: [n_experts, n_pos, d_model]
+            all_layer_directions[layer_idx] = torch.stack(
+                [layer_cache[eid] for eid in range(n_experts)], dim=0
+            )
+
+        print(f"\n  Loaded/computed directions for {len(all_layer_directions)} MoE layers")
 
         print("\n" + "="*80)
         print("ALLEX GRID SEARCH (LAYER x POSITION x COEFF)")
@@ -1332,53 +1351,44 @@ def run_pipeline(args):
         layer, expert_id, diff_pct = candidate_experts[rank - 1]
         print(f"  Rank {rank}: Layer {layer}, Expert {expert_id}, Diff {diff_pct:.2f}%")
 
-    # Direction generation / loading
-    directions_dir = os.path.join(base_output_dir, "expert_directions")
-
     print("\n" + "="*80)
-    print("GENERATING / LOADING DIRECTIONS")
+    print("LOADING / COMPUTING DIRECTIONS")
     print("="*80)
 
-    expert_data = {}  # rank -> (mean_diff, activation_rms)
+    shared_cache_dir = _get_shared_cache_dir(base_model_name, cfg.system_prompt)
+    print(f"  Cache: {shared_cache_dir}/layer_{{L}}.pt")
 
+    # Group expert_ids by layer so each layer's cache file is touched once
+    from collections import defaultdict
+    layer_to_ranks = defaultdict(list)  # layer_idx -> [(rank, expert_id)]
     for rank in expert_ranks:
-        layer, expert_id, diff_pct = candidate_experts[rank - 1]
-        save_path = os.path.join(directions_dir, f"expert_L{layer}_E{expert_id}_mean_diff.pt")
-        scale_path = os.path.join(directions_dir, f"expert_L{layer}_E{expert_id}_scale.pt")
+        layer, expert_id, _ = candidate_experts[rank - 1]
+        layer_to_ranks[layer].append((rank, expert_id))
 
-        if not args.skip_generate:
-            os.makedirs(directions_dir, exist_ok=True)
+    expert_data = {}  # rank -> mean_diff tensor
+    for layer_idx in sorted(layer_to_ranks):
+        rank_expert_pairs = layer_to_ranks[layer_idx]
+        expert_ids_needed = [eid for _, eid in rank_expert_pairs]
 
-            mean_diff, activation_rms = get_expert_mean_diff(
-                model_base,
-                harmful_train,
-                harmless_train,
-                layer,
-                expert_id,
-                batch_size=args.batch_size
-            )
-
-            torch.save(mean_diff, save_path)
-            torch.save(activation_rms, scale_path)
-            print(f"  Saved: {save_path}")
-        else:
-            print(f"\n  Loading rank {rank} (L{layer} E{expert_id}) from cache...")
-            mean_diff = torch.load(save_path)
-            print(f"    Direction: {save_path}")
-
-            activation_rms = None
-            if os.path.exists(scale_path):
-                activation_rms = torch.load(scale_path)
-                print(f"    Scale: {scale_path}")
-
-        expert_data[rank] = (mean_diff, activation_rms)
+        layer_cache = _load_or_compute_layer_directions(
+            layer_idx=layer_idx,
+            expert_ids_needed=expert_ids_needed,
+            model_base=model_base,
+            harmful_train=harmful_train,
+            harmless_train=harmless_train,
+            batch_size=args.batch_size,
+            cache_dir=shared_cache_dir,
+            skip_generate=args.skip_generate,
+        )
+        for rank, expert_id in rank_expert_pairs:
+            expert_data[rank] = layer_cache[expert_id]
 
     # ------------------------------------------------------------------
     # Mode 5: BY NAME+POS — grid over coeffs only (position fixed)
     # ------------------------------------------------------------------
     if mode == "by_name_pos":
         layer, expert_id, diff_pct = candidate_experts[0]
-        mean_diff, _ = expert_data[1]
+        mean_diff = expert_data[1]
         position = args.position
 
         print("\n" + "="*80)
@@ -1605,7 +1615,7 @@ def run_pipeline(args):
         }, f, indent=2)
 
     # Full evaluation with best combo
-    best_mean_diff, _ = expert_data[best_rank]
+    best_mean_diff = expert_data[best_rank]
     print(f"\n  Running full evaluation: L{best_layer} E{best_expert_id} "
           f"pos={best_position} coeff={best_coeff}")
     run_single_experiment(
