@@ -1,3 +1,8 @@
+# DEPRECATED: This pipeline has been superseded by run_expert_steering.py
+# in the refusal_steering/ subfolder. This file is kept for reference only
+# and is NOT maintained. All paths and imports assume execution from within
+# the refusal_steering/ directory.
+
 """
 Selection function for expert-specific directions.
 

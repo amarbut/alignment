@@ -1,15 +1,34 @@
 """
-Expert-Specific Refusal Vector Pipeline
+Expert-Specific Refusal Vector Pipeline (Consolidated)
 
-This pipeline generates and evaluates refusal vectors for individual MoE experts,
-following the Arditi mean-difference approach but applied per-expert rather than per-layer.
+Five modes, selected by CLI flags:
 
-Key differences from standard Arditi pipeline:
-1. Selects candidate experts based on activation frequency differences
-2. For each expert, forces that expert and extracts MLP output activations
-3. Generates one candidate vector per (expert, token_position) instead of (layer, position)
-4. Uses Arditi evaluation/selection to pick best expert-specific vector
-5. Applies intervention weighted by expert's routing probability
+  Mode 1 — THRESHOLD GRID (default):
+    judge grid over experts >= model_card threshold,
+    sweeping 5 positions x grid_coeffs.
+
+  Mode 2 — ALLEX GRID (--allex):
+    judge grid over ALL experts at ALL MoE layers,
+    sweeping 5 positions x grid_coeffs.
+
+  Mode 3 — RANK GRID (--expert_rank N):
+    judge grid over the top-N experts by diff rank,
+    sweeping 5 positions x grid_coeffs.
+
+  Mode 4 — BY NAME GRID (--layer L --expert E):
+    judge grid for one named expert,
+    sweeping 5 positions x grid_coeffs.
+
+  Mode 5 — BY NAME+POS GRID (--layer L --expert E --position P):
+    judge grid for one named expert at a fixed position,
+    sweeping only grid_coeffs.
+
+Usage examples:
+  python run_expert_steering.py --model_path allenai/OLMoE-1B-7B-0924-Instruct
+  python run_expert_steering.py --model_path ... --allex
+  python run_expert_steering.py --model_path ... --expert_rank 5
+  python run_expert_steering.py --model_path ... --layer 9 --expert 39
+  python run_expert_steering.py --model_path ... --layer 9 --expert 39 --position -1
 """
 
 # =============================================================================
@@ -47,33 +66,80 @@ from pathlib import Path
 from dataset.load_dataset import load_dataset_split, load_dataset
 from config import Config
 from model_utils.model_factory_moe import construct_model_base
-from submodules.arditi.select_direction import get_refusal_scores
+from submodules.arditi.select_direction import get_refusal_scores, get_last_position_logits, kl_div_fn
 from submodules.evaluate_jailbreak import evaluate_jailbreak
 
 from submodules.expert_steering.expert_selection import get_candidate_experts
 from submodules.expert_steering.expert_specific_activations import get_expert_mean_diff
-from submodules.expert_steering.expert_intervention import get_expert_weighted_intervention_hooks
-from submodules.expert_steering.select_direction_moe import select_expert_direction
+from submodules.expert_steering.expert_intervention import (
+    get_expert_weighted_activation_addition_hook,
+    get_expert_weighted_intervention_hooks,
+    get_all_expert_weighted_activation_addition_hook,
+    get_all_expert_weighted_intervention_hooks,
+)
 
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Expert-specific refusal vector pipeline for MoE models"
+        description="Expert-specific refusal vector pipeline (consolidated, 5 modes)"
     )
 
     parser.add_argument(
         '--model_path',
         type=str,
-        default='unsloth/gpt-oss-20b-unsloth-bnb-4bit',
+        required=True,
         help='Path to the base model'
     )
 
+    # -------------------------------------------------------------------------
+    # Mode selection flags
+    # -------------------------------------------------------------------------
+    parser.add_argument(
+        '--allex',
+        action='store_true',
+        help='[Mode 2] Run judge grid over ALL experts at ALL MoE layers x positions x coeffs'
+    )
+
+    parser.add_argument(
+        '--expert_rank',
+        type=int,
+        default=None,
+        help='[Mode 3] Run judge grid for top-N experts by diff rank (1-indexed). '
+             'E.g. --expert_rank 5 searches experts ranked 1-5.'
+    )
+
+    parser.add_argument(
+        '--layer',
+        type=int,
+        default=None,
+        help='[Modes 4 & 5] Layer index of a specific expert to steer'
+    )
+
+    parser.add_argument(
+        '--expert',
+        type=int,
+        default=None,
+        help='[Modes 4 & 5] Expert index within the layer to steer'
+    )
+
+    parser.add_argument(
+        '--position',
+        type=int,
+        default=None,
+        help='[Mode 5 only] Fix token position (e.g. -1) instead of grid-searching positions. '
+             'Only used when --layer and --expert are also set.'
+    )
+
+    # -------------------------------------------------------------------------
+    # Expert selection
+    # -------------------------------------------------------------------------
     parser.add_argument(
         '--threshold',
         type=float,
-        default=15.0,
-        help='Expert selection threshold (percentage points)'
+        default=None,
+        help='Expert selection threshold in percentage points (Mode 1 / 3). '
+             'If not set, uses model card expert_diff_threshold.'
     )
 
     parser.add_argument(
@@ -81,33 +147,65 @@ def parse_arguments():
         type=str,
         default='both',
         choices=['harmful_preferred', 'harmless_preferred', 'both'],
-        help='Which type of experts to select'
+        help='Which type of experts to select (default: both)'
+    )
+
+    # -------------------------------------------------------------------------
+    # Grid search options
+    # -------------------------------------------------------------------------
+    parser.add_argument(
+        '--grid_coeffs',
+        type=float,
+        nargs='+',
+        default=[25, 50, 75, 100, 150, 200, 250, 300],
+        help='Coeff values to search over in grid (default: 25 50 75 100 150 200 250 300)'
+    )
+
+    parser.add_argument(
+        '--judge_grid_tokens',
+        type=int,
+        default=25,
+        help='Max new tokens for judge grid search generations (default: 25)'
+    )
+
+    parser.add_argument(
+        '--judge_grid_n_samples',
+        type=int,
+        default=25,
+        help='Number of harmful val samples to use for judge grid search (default: 25)'
+    )
+
+    # -------------------------------------------------------------------------
+    # Generation / evaluation
+    # -------------------------------------------------------------------------
+    parser.add_argument(
+        '--max_new_tokens',
+        type=int,
+        default=100,
+        help='Maximum new tokens for full evaluation generation (default: 100)'
     )
 
     parser.add_argument(
         '--skip_generate',
         action='store_true',
-        help='Skip generation and load from cache'
-    )
-
-    parser.add_argument(
-        '--skip_select',
-        action='store_true',
-        help='Skip selection and load from cache'
-    )
-
-    parser.add_argument(
-        '--skip_eval',
-        action='store_true',
-        help='Skip evaluation (only generate and select)'
+        help='Skip direction generation and load from cache'
     )
 
     parser.add_argument(
         '--skip_baseline',
         action='store_true',
-        help='Skip eval on baseline model'
+        help='Skip baseline model evaluation'
     )
 
+    parser.add_argument(
+        '--skip_harmless',
+        action='store_true',
+        help='Skip harmless (refusal induction) evaluations'
+    )
+
+    # -------------------------------------------------------------------------
+    # Dataset / sampling
+    # -------------------------------------------------------------------------
     parser.add_argument(
         '--n_train',
         type=int,
@@ -133,36 +231,7 @@ def parse_arguments():
         '--batch_size',
         type=int,
         default=32,
-        help='Batch size for processing'
-    )
-
-    parser.add_argument(
-        '--coeff',
-        type=float,
-        default=1.0,
-        help='Coefficient for activation addition'
-    )
-
-    parser.add_argument(
-        '--max_new_tokens',
-        type=int,
-        default=100,
-        help='Maximum new tokens for generation'
-    )
-
-    parser.add_argument(
-        '--top_n',
-        type=int,
-        default=1,
-        help='Number of top vectors to select and use for steering (default: 1)'
-    )
-
-    parser.add_argument(
-        '--eval_datasets',
-        type=str,
-        nargs='+',
-        default=None,
-        help='Evaluation datasets to use (default: uses config). Options: jailbreakbench, advbench, tdc2023, maliciousinstruct, strongreject, harmbench_test'
+        help='Batch size for processing (default: 32)'
     )
 
     parser.add_argument(
@@ -174,30 +243,33 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        '--normalize',
+        '--eval_datasets',
         type=str,
-        default='expert_scale',
-        choices=['none', 'unit', 'expert_scale'],
-        help='Direction normalization mode: none=raw vectors, unit=unit norm, '
-             'expert_scale=unit norm scaled by expert activation RMS (default: expert_scale)'
+        nargs='+',
+        default=None,
+        help='Evaluation datasets (default: uses config). Options: jailbreakbench, advbench, '
+             'tdc2023, maliciousinstruct, strongreject, harmbench_test'
     )
 
     return parser.parse_args()
 
 
+# =============================================================================
+# Data helpers
+# =============================================================================
+
 def load_and_sample_datasets(cfg):
     """Load and sample datasets with size safety checks."""
     random.seed(42)
 
-    # Load full datasets
     harmful_train_full = load_dataset_split(harmtype='harmful', split='train', instructions_only=True)
     harmless_train_full = load_dataset_split(harmtype='harmless', split='train', instructions_only=True)
-    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=True)
+    # Load harmful_val as dicts (instructions_only=False) so judge stage can generate completions
+    harmful_val_full = load_dataset_split(harmtype='harmful', split='val', instructions_only=False)
     harmless_val_full = load_dataset_split(harmtype='harmless', split='val', instructions_only=True)
     harmful_test_full = load_dataset_split(harmtype='harmful', split='test', instructions_only=True)
     harmless_test_full = load_dataset_split(harmtype='harmless', split='test', instructions_only=False)
 
-    # Sample with size checks
     n_train_actual = min(cfg.n_train, len(harmful_train_full), len(harmless_train_full))
     n_val_actual = min(cfg.n_val, len(harmful_val_full), len(harmless_val_full))
     n_test_actual = min(cfg.n_test, len(harmful_test_full), len(harmless_test_full))
@@ -216,17 +288,12 @@ def load_and_sample_datasets(cfg):
     harmful_test = random.sample(harmful_test_full, n_test_actual)
     harmless_test = random.sample(harmless_test_full, n_test_actual)
 
-    return (harmful_train, harmless_train, harmful_val,
-            harmless_val, harmful_test, harmless_test)
+    return (harmful_train, harmless_train, harmful_val, harmless_val,
+            harmful_test, harmless_test)
 
 
-def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
-    """
-    Filter datasets based on refusal scores.
-
-    Returns:
-        Filtered datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
-    """
+def filter_data(cfg, model_base, harmful_train, harmless_train):
+    """Filter training datasets based on refusal scores."""
     def filter_examples(dataset, scores, threshold, comparison):
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
 
@@ -239,7 +306,7 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         )
         harmless_train_scores = get_refusal_scores(
             model_base.model, harmless_train, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer, 
+            model_base.refusal_toks, tokenizer=model_base.tokenizer,
             refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
         )
 
@@ -252,322 +319,818 @@ def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, har
         harmful_train = harmful_train_filtered
         harmless_train = harmless_train_filtered
 
-    if cfg.filter_val:
-        print("\n  Filtering validation data...")
-        harmful_val_scores = get_refusal_scores(
-            model_base.model, harmful_val, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
-        )
-        harmless_val_scores = get_refusal_scores(
-            model_base.model, harmless_val, model_base.tokenize_instructions_fn,
-            model_base.refusal_toks, tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
-        )
-
-        harmful_val_filtered = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
-        harmless_val_filtered = filter_examples(harmless_val, harmless_val_scores, 0, lambda x, y: x < y)
-
-        print(f"    Harmful val: {len(harmful_val)} -> {len(harmful_val_filtered)}")
-        print(f"    Harmless val: {len(harmless_val)} -> {len(harmless_val_filtered)}")
-
-        harmful_val = harmful_val_filtered
-        harmless_val = harmless_val_filtered
-
-    return harmful_train, harmless_train, harmful_val, harmless_val
+    return harmful_train, harmless_train
 
 
-def generate_expert_specific_directions(
-    model_base,
-    harmful_train,
-    harmless_train,
-    candidate_experts,
-    artifact_dir,
-    batch_size=32
+# =============================================================================
+# Direction generation
+# =============================================================================
+
+def generate_all_expert_directions(
+    model_base, harmful_train, harmless_train,
+    model_card, artifact_dir, batch_size=32
 ):
     """
-    Generate mean difference vectors for each candidate expert.
+    Generate mean difference vectors for ALL experts at ALL MoE layers.
 
-    Returns:
-        Tuple of:
-            - expert_directions: dict mapping (layer, expert_id) -> mean_diff tensor [pos, d_model]
-            - expert_scales: dict mapping (layer, expert_id) -> activation_rms tensor [pos]
+    Saves per-layer to enable incremental progress. Returns:
+      {layer_idx: tensor[n_experts, n_pos, d_model]}
     """
     os.makedirs(artifact_dir, exist_ok=True)
 
-    expert_directions = {}
-    expert_scales = {}
+    num_layers = model_card.get_num_layers()
+    all_layer_directions = {}
 
     print("\n" + "="*80)
-    print("GENERATING EXPERT-SPECIFIC DIRECTIONS")
+    print("GENERATING ALL-EXPERT DIRECTIONS")
     print("="*80)
 
-    for layer_idx, expert_id, diff_pct in candidate_experts:
-        print(f"\n[Expert: Layer {layer_idx}, Expert {expert_id}, Diff: {diff_pct:.2f}%]")
+    for layer_idx in range(num_layers):
+        if not model_card.is_moe_layer(layer_idx):
+            continue
 
-        # Compute mean difference and activation RMS for this expert
-        mean_diff, activation_rms = get_expert_mean_diff(
-            model_base,
-            harmful_train,
-            harmless_train,
-            layer_idx,
-            expert_id,
-            batch_size=batch_size
-        )
+        layer_path = os.path.join(artifact_dir, f"layer_{layer_idx}_all_experts.pt")
 
-        expert_directions[(layer_idx, expert_id)] = mean_diff
-        expert_scales[(layer_idx, expert_id)] = activation_rms
+        if os.path.exists(layer_path):
+            print(f"\n[Layer {layer_idx}] Loading from cache")
+            layer_dirs = torch.load(layer_path, map_location='cpu')
+            all_layer_directions[layer_idx] = layer_dirs
+            continue
 
-        # Save individual expert direction
-        save_path = os.path.join(
-            artifact_dir,
-            f"expert_L{layer_idx}_E{expert_id}_mean_diff.pt"
-        )
-        torch.save(mean_diff, save_path)
-        print(f"  Saved to: {save_path}")
+        n_experts = model_card.get_num_experts(layer_idx)
+        print(f"\n[Layer {layer_idx}] Generating directions for {n_experts} experts")
 
-    # Save combined dictionaries
-    combined_path = os.path.join(artifact_dir, "all_expert_directions.pt")
-    torch.save(expert_directions, combined_path)
-    print(f"\n✓ Saved all expert directions to: {combined_path}")
+        expert_diffs = []
+        for expert_id in range(n_experts):
+            print(f"  Expert {expert_id}/{n_experts-1}")
+            mean_diff, _ = get_expert_mean_diff(
+                model_base, harmful_train, harmless_train,
+                layer_idx, expert_id, batch_size=batch_size
+            )
+            expert_diffs.append(mean_diff)  # [n_pos, d_model]
 
-    scales_path = os.path.join(artifact_dir, "all_expert_scales.pt")
-    torch.save(expert_scales, scales_path)
-    print(f"✓ Saved all expert scales to: {scales_path}")
+        # Stack: [n_experts, n_pos, d_model]
+        layer_dirs = torch.stack(expert_diffs, dim=0).cpu()
+        all_layer_directions[layer_idx] = layer_dirs
 
-    return expert_directions, expert_scales
+        torch.save(layer_dirs, layer_path)
+        print(f"  Saved layer {layer_idx} directions to: {layer_path}")
 
+        del expert_diffs
+        torch.cuda.empty_cache()
 
-def create_candidate_tensor(expert_directions, expert_scales=None):
-    """
-    Convert expert directions to format compatible with Arditi's select_direction.
+    combined_path = os.path.join(artifact_dir, "all_layer_expert_directions.pt")
+    torch.save(all_layer_directions, combined_path)
+    print(f"\nSaved all layer-expert directions to: {combined_path}")
 
-    The select_direction function expects: [n_positions, n_layers, d_model]
-    We have: dict of {(layer, expert): [n_positions, d_model]}
-
-    We'll create a synthetic "layer" dimension where each (layer, expert) pair
-    gets its own index. Then select_direction will pick the best across all.
-
-    If expert_scales is provided, also creates a scales tensor [n_positions, n_candidates].
-    """
-    # Get dimensions from first entry
-    first_key = list(expert_directions.keys())[0]
-    first_tensor = expert_directions[first_key]
-    n_positions, d_model = first_tensor.shape
-
-    n_candidates = len(expert_directions)
-
-    # Create tensor: [n_positions, n_candidates, d_model]
-    candidates = torch.zeros(n_positions, n_candidates, d_model,
-                            dtype=first_tensor.dtype, device=first_tensor.device)
-
-    # Create scales tensor if provided: [n_positions, n_candidates]
-    candidate_scales = None
-    if expert_scales is not None:
-        candidate_scales = torch.zeros(n_positions, n_candidates,
-                                       dtype=first_tensor.dtype, device=first_tensor.device)
-
-    # Create mapping from candidate_idx -> (layer, expert)
-    candidate_mapping = {}
-
-    for idx, ((layer, expert), direction) in enumerate(expert_directions.items()):
-        candidates[:, idx, :] = direction
-        candidate_mapping[idx] = (layer, expert)
-        if expert_scales is not None and (layer, expert) in expert_scales:
-            candidate_scales[:, idx] = expert_scales[(layer, expert)]
-
-    return candidates, candidate_mapping, candidate_scales
+    return all_layer_directions
 
 
-def select_best_expert_direction(
-    model_base,
-    harmful_val,
-    harmless_val,
-    expert_directions,
-    artifact_dir,
-    model_card,
-    top_n=1,
-    normalize='expert_scale',
-    expert_scales=None
+# =============================================================================
+# Grid search functions
+# =============================================================================
+
+def run_grid_search(
+    model_base, model_card, expert_data, candidate_experts, expert_ranks,
+    harmful_val, harmless_val,
+    grid_coeffs, max_new_tokens=25, n_samples=25, batch_size=32,
+    output_dir=None
 ):
     """
-    Select the best expert-specific direction(s) using Arditi's criteria.
+    Two-stage judge-based grid search over (expert, position, coeff).
 
-    Returns:
-        If top_n == 1: (pos, layer, expert_id, direction, mu_b)
-        If top_n > 1: (selected_directions_list, mu_b) where selected_directions_list
-                      contains list of (pos, layer, expert_id, direction) tuples
-    """
-    os.makedirs(artifact_dir, exist_ok=True)
+    Used by modes 1, 3, and 4.
 
-    print("\n" + "="*80)
-    if top_n == 1:
-        print("SELECTING BEST EXPERT DIRECTION")
-    else:
-        print(f"SELECTING TOP {top_n} EXPERT DIRECTIONS")
-    print("="*80)
+    Stage 1: Fast forward-pass refusal scores + KL-div over all combos.
+             Keeps the top max(ceil(total * 0.025), 15) candidates by
+             lowest refusal score (excluding KL failures).
 
-    # Convert to format compatible with select_direction
-    candidates, candidate_mapping, candidate_scales = create_candidate_tensor(
-        expert_directions, expert_scales
-    )
-
-    print(f"Candidates tensor shape: {candidates.shape}")
-    print(f"Number of expert candidates: {len(candidate_mapping)}")
-    if candidate_scales is not None:
-        print(f"Candidate scales tensor shape: {candidate_scales.shape}")
-
-    # Use expert-specific MLP-level selection
-    mu_b = torch.zeros(candidates.size(-1), device=candidates.device)
-
-    result = select_expert_direction(
-        model_base,
-        harmful_val,
-        harmless_val,
-        candidates,
-        candidate_mapping,  # Pass the mapping so we know which layer each expert is in
-        artifact_dir=artifact_dir,
-        coeff=args.coeff,  # Use command-line argument
-        mu_b=mu_b,
-        tau=1.0,
-        top_n=top_n,
-        model_card=model_card,
-        normalize=normalize,
-        candidate_scales=candidate_scales
-    )
-
-    # Handle single vs multiple directions
-    if top_n == 1:
-        pos, candidate_idx, direction = result
-        # Map candidate_idx back to (layer, expert)
-        layer, expert_id = candidate_mapping[candidate_idx]
-
-        print(f"\n✓ Best direction:")
-        print(f"  Position: {pos}")
-        print(f"  Layer: {layer}")
-        print(f"  Expert: {expert_id}")
-        print(f"  Direction norm: {direction.norm().item():.4f}")
-
-        return pos, layer, expert_id, direction, mu_b
-    else:
-        # result is a list of (pos, candidate_idx, direction) tuples
-        selected_directions = []
-        for pos, candidate_idx, direction in result:
-            layer, expert_id = candidate_mapping[candidate_idx]
-            selected_directions.append((pos, layer, expert_id, direction))
-
-        return selected_directions, mu_b
-
-
-def generate_and_evaluate_completions(
-    model_base,
-    dataset_name,
-    expert_info,  # Can be (layer, expert_id, direction) or list of (layer, expert_id, direction)
-    coeff,
-    output_dir,
-    intervention_label,
-    eval_methodologies,
-    max_new_tokens=256,
-    dataset=None
-):
-    """Generate completions with expert-specific intervention and evaluate.
+    Stage 2: Generate short completions and run the OpenAI judge only on
+             the surviving candidates.
 
     Args:
-        expert_info: Either a single (layer, expert_id, direction) tuple for single-vector steering,
-                     or a list of such tuples for multi-vector steering
+        expert_data: dict of rank -> (mean_diff, activation_rms)
+        candidate_experts: list of (layer, expert_id, diff_pct) tuples
+        expert_ranks: list of 1-indexed ranks to search
+
+    Returns:
+        (best_rank, best_position, best_coeff, all_results)
     """
+    from tqdm import tqdm
+    import math
 
-    # Create output directory
-    completions_dir = os.path.join(output_dir, 'completions', intervention_label)
-    os.makedirs(completions_dir, exist_ok=True)
+    positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
 
-    # Load dataset if not provided
-    if dataset is None:
-        dataset = load_dataset(dataset_name)
-        dataset = random.sample(dataset, min(100, len(dataset)))
+    # harmful_val contains dicts; extract instructions for refusal score stage
+    harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+    harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
 
-    # Get intervention hooks - handle both single and multiple directions
-    if isinstance(expert_info, list):
-        # Multiple directions
-        from submodules.expert_steering.expert_intervention import get_multi_expert_weighted_intervention_hooks
-        fwd_pre_hooks, fwd_hooks = get_multi_expert_weighted_intervention_hooks(
-            model_base,
-            expert_directions=expert_info,  # List of (layer, expert_id, direction)
-            coeff=coeff
-        )
+    # Subsample for judge stage (dicts needed for generate_completions)
+    sample = harmful_val[:n_samples]
+
+    # KL threshold from model card
+    if hasattr(model_card, 'get_expert_steering_thresholds'):
+        kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
     else:
-        # Single direction (backward compatibility)
-        layer, expert_id, direction = expert_info
+        kl_threshold = 1.0
+
+    n_experts = len(expert_ranks)
+    total = n_experts * len(positions) * len(grid_coeffs)
+    n_judge = max(math.ceil(total * 0.025), 15)
+
+    print(f"\n  Grid search (2-stage): {n_experts} experts x {len(positions)} positions x "
+          f"{len(grid_coeffs)} coeffs = {total} combos")
+    print(f"  Stage 1: refusal score + KL-div sweep (all {total} combos)")
+    print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(2.5, round(100*n_judge/total, 1))}%) candidates")
+    print(f"  Positions: {positions}, Coeffs: {grid_coeffs}")
+    print(f"  KL threshold: {kl_threshold}")
+    print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
+
+    # -------------------------------------------------------------------------
+    # Stage 1: fast refusal score + KL-div sweep
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 1: Refusal score + KL-div sweep ---")
+
+    baseline_scores = get_refusal_scores(
+        model_base.model, harmful_val_instructions,
+        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+        fwd_hooks=[], batch_size=batch_size,
+        tokenizer=model_base.tokenizer,
+        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+    )
+    baseline_mean = baseline_scores.mean().item()
+    print(f"  Baseline refusal score: {baseline_mean:.4f}")
+
+    print(f"  Collecting baseline harmless logits...")
+    baseline_harmless_logits = get_last_position_logits(
+        model=model_base.model,
+        tokenizer=model_base.tokenizer,
+        instructions=harmless_val_instructions,
+        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+        fwd_pre_hooks=[],
+        fwd_hooks=[],
+        batch_size=batch_size
+    )
+
+    stage1_results = []
+    with tqdm(total=total, desc="  Stage 1 sweep") as pbar:
+        for rank in expert_ranks:
+            layer, expert_id, diff_pct = candidate_experts[rank - 1]
+            mean_diff, _ = expert_data[rank]
+
+            mlp_module = model_card.get_mlp_module(layer)
+
+            for position in positions:
+                direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
+                for coeff in grid_coeffs:
+                    hook_fn = get_expert_weighted_activation_addition_hook(
+                        direction=direction,
+                        expert_id=expert_id,
+                        coeff=-coeff,
+                        model_card=model_card
+                    )
+                    fwd_hooks = [(mlp_module, hook_fn)]
+
+                    scores = get_refusal_scores(
+                        model_base.model, harmful_val_instructions,
+                        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                        fwd_hooks=fwd_hooks, batch_size=batch_size,
+                        tokenizer=model_base.tokenizer,
+                        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                    )
+                    mean_score = scores.mean().item()
+
+                    intervention_logits = get_last_position_logits(
+                        model=model_base.model,
+                        tokenizer=model_base.tokenizer,
+                        instructions=harmless_val_instructions,
+                        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                        fwd_pre_hooks=[],
+                        fwd_hooks=fwd_hooks,
+                        batch_size=batch_size
+                    )
+                    kl_div = kl_div_fn(
+                        baseline_harmless_logits, intervention_logits, mask=None
+                    ).mean(dim=0).item()
+
+                    passed_kl = kl_div <= kl_threshold
+
+                    stage1_results.append({
+                        "rank": rank,
+                        "layer": layer,
+                        "expert_id": expert_id,
+                        "diff_pct": diff_pct,
+                        "position": position,
+                        "coeff": coeff,
+                        "refusal_score": mean_score,
+                        "refusal_reduction": baseline_mean - mean_score,
+                        "kl_div": kl_div,
+                        "passed_kl": passed_kl,
+                    })
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"score={mean_score:.3f} kl={kl_div:.3f}{'✓' if passed_kl else '✗'}")
+
+    passing = [r for r in stage1_results if r["passed_kl"]]
+    failing = [r for r in stage1_results if not r["passed_kl"]]
+    passing.sort(key=lambda x: x["refusal_score"])
+
+    print(f"\n  Stage 1: {len(passing)} passed KL filter, {len(failing)} excluded")
+
+    if not passing:
+        print(f"  WARNING: No combos passed KL filter (threshold={kl_threshold}). "
+              f"Falling back to lowest-KL combos.")
+        stage1_results.sort(key=lambda x: x["kl_div"])
+        passing = stage1_results[:n_judge]
+
+    candidates = passing[:n_judge]
+
+    print(f"\n  Stage 1 top {len(candidates)} candidates (sorted by refusal score):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>8}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*8}")
+    for r in candidates:
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} "
+              f"{r['coeff']:>8.1f} {r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} "
+              f"{r['kl_div']:>8.4f}")
+
+    # -------------------------------------------------------------------------
+    # Stage 2: OpenAI judge on surviving candidates
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 2: OpenAI judge on {len(candidates)} candidates ---")
+
+    combos_dir = None
+    if output_dir is not None:
+        combos_dir = os.path.join(output_dir, "combos")
+        os.makedirs(combos_dir, exist_ok=True)
+
+    best_asr = -1.0
+    best_rank = None
+    best_position = None
+    best_coeff = None
+
+    for i, candidate in enumerate(candidates):
+        rank = candidate["rank"]
+        layer = candidate["layer"]
+        expert_id = candidate["expert_id"]
+        position = candidate["position"]
+        coeff = candidate["coeff"]
+
+        print(f"\n  [{i+1}/{len(candidates)}] Rank {rank} L{layer} E{expert_id} "
+              f"pos={position} coeff={coeff} (refusal={candidate['refusal_score']:.4f})")
+
+        mean_diff, _ = expert_data[rank]
+        direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
         fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
             model_base,
             layer_idx=layer,
             expert_id=expert_id,
             direction=direction,
-            coeff=coeff
+            coeff=-coeff
         )
 
-    # Generate completions
-    print(f"\nGenerating completions for {dataset_name} with {intervention_label}...")
-    completions = model_base.generate_completions(
-        dataset,
-        fwd_pre_hooks=fwd_pre_hooks,
-        fwd_hooks=fwd_hooks,
-        max_new_tokens=max_new_tokens
+        completions = model_base.generate_completions(
+            sample,
+            fwd_pre_hooks=fwd_pre_hooks,
+            fwd_hooks=fwd_hooks,
+            max_new_tokens=max_new_tokens,
+            batch_size=batch_size
+        )
+
+        combo_label = f"R{rank}_L{layer}_E{expert_id}_pos{position}_c{coeff}"
+        eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
+
+        evaluation = evaluate_jailbreak(
+            completions=completions,
+            methodologies=["openai"],
+            evaluation_path=eval_path,
+            openai_delay=0.1
+        )
+
+        asr = evaluation.get("openai_success_rate", 0.0)
+        counts = evaluation.get("openai_overall_counts", {})
+        n_full = counts.get("full_response", 0)
+        n_refusal = counts.get("refusal", 0)
+        n_non = counts.get("non_response", 0)
+
+        print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
+
+        candidate.update({
+            "asr": asr,
+            "full_response": n_full,
+            "refusal_count": n_refusal,
+            "non_response": n_non,
+        })
+
+        if asr > best_asr:
+            best_asr = asr
+            best_rank = rank
+            best_position = position
+            best_coeff = coeff
+
+    judged = sorted(candidates, key=lambda x: (-x.get("asr", -1), x.get("non_response", 0)))
+    not_judged = stage1_results[n_judge:]
+    all_results = judged + not_judged
+
+    print(f"\n  Top stage-2 results (by ASR):")
+    print(f"  {'Rank':>5} {'Layer':>6} {'Expert':>7} {'Pos':>5} {'Coeff':>8} "
+          f"{'ASR':>8} {'Full':>6} {'Ref':>6} {'Non':>6} {'RefScore':>10}")
+    print(f"  {'-'*5} {'-'*6} {'-'*7} {'-'*5} {'-'*8} {'-'*8} {'-'*6} {'-'*6} {'-'*6} {'-'*10}")
+    for r in judged[:10]:
+        print(f"  {r['rank']:>5} {r['layer']:>6} {r['expert_id']:>7} {r['position']:>5} "
+              f"{r['coeff']:>8.1f} {r.get('asr', 0):>8.2%} "
+              f"{r.get('full_response', '-'):>6} {r.get('refusal_count', '-'):>6} "
+              f"{r.get('non_response', '-'):>6} {r['refusal_score']:>10.4f}")
+
+    if best_rank is not None:
+        bl, be = candidate_experts[best_rank - 1][0], candidate_experts[best_rank - 1][1]
+        print(f"\n  Best: rank={best_rank} (L{bl} E{be}), position={best_position}, "
+              f"coeff={best_coeff}, ASR={best_asr:.2%}")
+
+    return best_rank, best_position, best_coeff, all_results
+
+
+def run_allex_grid_search(
+    model_base, model_card, all_layer_directions,
+    harmful_val,   # list of dicts
+    harmless_val,  # list of strings
+    grid_coeffs=None,
+    max_new_tokens=25, n_samples=25, batch_size=32,
+    output_dir=None
+):
+    """
+    Two-stage judge-based grid search over (layer, position, coeff) for allex.
+
+    Used by mode 2 (--allex).
+
+    Stage 1: Fast forward-pass refusal scores + KL-div over all combos.
+             Keeps top max(ceil(total * 0.025), 15) candidates.
+
+    Stage 2: Generate short completions and run OpenAI judge on candidates.
+
+    Returns:
+        (best_layer, best_position, best_coeff, all_results)
+    """
+    from tqdm import tqdm
+    import math
+
+    if grid_coeffs is None:
+        grid_coeffs = [25, 50, 75, 100, 150, 200, 250, 300]
+
+    positions = list(range(-5, 0))
+    layer_indices = sorted(all_layer_directions.keys())
+
+    harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+    harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
+
+    sample = random.sample(harmful_val, min(n_samples, len(harmful_val)))
+
+    if hasattr(model_card, 'get_expert_steering_thresholds'):
+        kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
+    else:
+        kl_threshold = 1.0
+
+    total = len(layer_indices) * len(positions) * len(grid_coeffs)
+    n_judge = max(math.ceil(total * 0.025), 15)
+
+    print(f"\n  Allex grid (2-stage): {len(layer_indices)} layers x {len(positions)} pos x "
+          f"{len(grid_coeffs)} coeffs = {total} combos")
+    print(f"  Stage 1: refusal score + KL-div sweep (all {total} combos)")
+    print(f"  Stage 2: OpenAI judge on top {n_judge} ({max(2.5, round(100*n_judge/total, 1))}%) candidates")
+    print(f"  Positions: {positions}, Coeffs: {grid_coeffs}")
+    print(f"  KL threshold: {kl_threshold}")
+    print(f"  Judge samples: {n_samples}, max_new_tokens: {max_new_tokens}")
+
+    # -------------------------------------------------------------------------
+    # Stage 1
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 1: Refusal score + KL-div sweep ---")
+
+    baseline_scores = get_refusal_scores(
+        model_base.model, harmful_val_instructions,
+        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+        fwd_hooks=[], batch_size=batch_size,
+        tokenizer=model_base.tokenizer,
+        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+    )
+    baseline_mean = baseline_scores.mean().item()
+    print(f"  Baseline refusal score: {baseline_mean:.4f}")
+
+    print(f"  Collecting baseline harmless logits...")
+    baseline_harmless_logits = get_last_position_logits(
+        model=model_base.model,
+        tokenizer=model_base.tokenizer,
+        instructions=harmless_val_instructions,
+        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+        fwd_pre_hooks=[],
+        fwd_hooks=[],
+        batch_size=batch_size
     )
 
-    # Save completions
-    completions_path = os.path.join(
-        completions_dir,
-        f"{dataset_name}_completions.json"
-    )
-    with open(completions_path, "w", encoding="utf-8") as f:
-        json.dump(completions, f, indent=4, ensure_ascii=False)
+    stage1_results = []
+    with tqdm(total=total, desc="  Stage 1 sweep") as pbar:
+        for layer_idx in layer_indices:
+            dirs = all_layer_directions[layer_idx]  # [n_experts, n_pos, d_model]
+            mlp_module = model_card.get_mlp_module(layer_idx)
 
-    print(f"Saved completions to: {completions_path}")
+            for position in positions:
+                dirs_at_pos = dirs[:, position, :]  # [n_experts, d_model]
 
-    # Evaluate
-    print(f"Evaluating completions...")
-    evaluation = evaluate_jailbreak(
-        completions=completions,
-        methodologies=eval_methodologies,
-        evaluation_path=os.path.join(completions_dir, f"{dataset_name}_evaluations.json"),
-    )
+                for coeff in grid_coeffs:
+                    hook = get_all_expert_weighted_activation_addition_hook(
+                        directions_for_layer=dirs_at_pos,
+                        coeff=-coeff,
+                        model_card=model_card
+                    )
+                    fwd_hooks = [(mlp_module, hook)]
 
-    # Save evaluations
-    eval_path = os.path.join(completions_dir, f"{dataset_name}_evaluations.json")
-    with open(eval_path, "w", encoding="utf-8") as f:
-        json.dump(evaluation, f, indent=4, ensure_ascii=False)
+                    scores = get_refusal_scores(
+                        model_base.model, harmful_val_instructions,
+                        model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                        fwd_hooks=fwd_hooks, batch_size=batch_size,
+                        tokenizer=model_base.tokenizer,
+                        refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                    )
+                    mean_score = scores.mean().item()
 
-    print(f"Saved evaluations to: {eval_path}")
+                    intervention_logits = get_last_position_logits(
+                        model=model_base.model,
+                        tokenizer=model_base.tokenizer,
+                        instructions=harmless_val_instructions,
+                        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                        fwd_pre_hooks=[],
+                        fwd_hooks=fwd_hooks,
+                        batch_size=batch_size
+                    )
+                    kl_div = kl_div_fn(
+                        baseline_harmless_logits, intervention_logits, mask=None
+                    ).mean(dim=0).item()
+                    passed_kl = kl_div <= kl_threshold
 
-    return completions, evaluation
+                    stage1_results.append({
+                        "layer": layer_idx,
+                        "position": position,
+                        "coeff": coeff,
+                        "refusal_score": mean_score,
+                        "refusal_reduction": baseline_mean - mean_score,
+                        "kl_div": kl_div,
+                        "passed_kl": passed_kl,
+                    })
+                    pbar.update(1)
+                    pbar.set_postfix_str(f"score={mean_score:.3f} kl={kl_div:.3f}{'✓' if passed_kl else '✗'}")
+
+    passing = [r for r in stage1_results if r["passed_kl"]]
+    passing.sort(key=lambda x: x["refusal_score"])
+    print(f"\n  Stage 1: {len(passing)} passed KL filter (threshold={kl_threshold}), "
+          f"{len(stage1_results) - len(passing)} excluded")
+
+    if not passing:
+        print(f"  WARNING: No combos passed KL filter. Falling back to lowest-KL combos.")
+        stage1_results.sort(key=lambda x: x["kl_div"])
+        passing = stage1_results[:n_judge]
+
+    candidates = passing[:n_judge]
+
+    print(f"\n  Stage 1 top {len(candidates)} candidates (sorted by refusal score):")
+    print(f"  {'Layer':>7} {'Pos':>5} {'Coeff':>8} {'Refusal':>10} {'Reduction':>10} {'KL':>8}")
+    print(f"  {'-'*7} {'-'*5} {'-'*8} {'-'*10} {'-'*10} {'-'*8}")
+    for r in candidates:
+        print(f"  {r['layer']:>7} {r['position']:>5} {r['coeff']:>8.1f} "
+              f"{r['refusal_score']:>10.4f} {r['refusal_reduction']:>10.4f} {r['kl_div']:>8.4f}")
+
+    # -------------------------------------------------------------------------
+    # Stage 2
+    # -------------------------------------------------------------------------
+    print(f"\n  --- Stage 2: OpenAI judge on {len(candidates)} candidates ---")
+
+    combos_dir = None
+    if output_dir is not None:
+        combos_dir = os.path.join(output_dir, "combos")
+        os.makedirs(combos_dir, exist_ok=True)
+
+    best_asr = -1.0
+    best_layer = None
+    best_position = None
+    best_coeff = None
+
+    for i, candidate in enumerate(candidates):
+        layer_idx = candidate["layer"]
+        position = candidate["position"]
+        coeff = candidate["coeff"]
+
+        print(f"\n  [{i+1}/{len(candidates)}] L{layer_idx} pos={position} coeff={coeff} "
+              f"(refusal={candidate['refusal_score']:.4f})")
+
+        dirs = all_layer_directions[layer_idx]
+        dirs_at_pos = dirs[:, position, :].to(model_base.model.device, dtype=model_base.model.dtype)
+
+        fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
+            model_base, layer_idx=layer_idx,
+            directions_for_layer=dirs_at_pos,
+            coeff=-coeff, model_card=model_card
+        )
+
+        completions = model_base.generate_completions(
+            sample,
+            fwd_pre_hooks=fwd_pre_hooks,
+            fwd_hooks=fwd_hooks,
+            max_new_tokens=max_new_tokens,
+            batch_size=batch_size
+        )
+
+        combo_label = f"L{layer_idx}_pos{position}_c{coeff}"
+        eval_path = os.path.join(combos_dir, f"{combo_label}_eval.json") if combos_dir else os.devnull
+
+        evaluation = evaluate_jailbreak(
+            completions=completions,
+            methodologies=["openai"],
+            evaluation_path=eval_path,
+            openai_delay=0.1
+        )
+
+        asr = evaluation.get("openai_success_rate", 0.0)
+        counts = evaluation.get("openai_overall_counts", {})
+        n_full = counts.get("full_response", 0)
+        n_refusal = counts.get("refusal", 0)
+        n_non = counts.get("non_response", 0)
+
+        print(f"    ASR={asr:.2%} (full={n_full}, refusal={n_refusal}, non_response={n_non})")
+
+        candidate.update({
+            "asr": asr,
+            "full_response": n_full,
+            "refusal_count": n_refusal,
+            "non_response": n_non,
+        })
+
+        if asr > best_asr:
+            best_asr = asr
+            best_layer = layer_idx
+            best_position = position
+            best_coeff = coeff
+
+    judged = sorted(candidates, key=lambda x: (-x.get("asr", -1), x.get("non_response", 0)))
+    not_judged = stage1_results[n_judge:]
+    all_results = judged + not_judged
+
+    print(f"\n  Top stage-2 results (by ASR):")
+    print(f"  {'Layer':>7} {'Pos':>5} {'Coeff':>8} {'ASR':>8} "
+          f"{'Full':>6} {'Ref':>6} {'Non':>6} {'RefScore':>10}")
+    print(f"  {'-'*7} {'-'*5} {'-'*8} {'-'*8} {'-'*6} {'-'*6} {'-'*6} {'-'*10}")
+    for r in judged[:10]:
+        print(f"  {r['layer']:>7} {r['position']:>5} {r['coeff']:>8.1f} "
+              f"{r.get('asr', 0):>8.2%} {r.get('full_response', '-'):>6} "
+              f"{r.get('refusal_count', '-'):>6} {r.get('non_response', '-'):>6} "
+              f"{r['refusal_score']:>10.4f}")
+
+    if best_layer is not None:
+        print(f"\n  Best: L{best_layer}, pos={best_position}, coeff={best_coeff}, ASR={best_asr:.2%}")
+
+    return best_layer, best_position, best_coeff, all_results
 
 
-def run_expert_specific_pipeline(args):
-    """Run the full expert-specific pipeline."""
+# =============================================================================
+# Full evaluation (post-grid-search)
+# =============================================================================
 
+def run_single_experiment(
+    args, cfg, model_base, expert_entry, rank,
+    mean_diff, position,
+    harmful_test, harmless_test, base_output_dir,
+    coeff_override
+):
+    """
+    Run generate+evaluate for one (expert, position, coeff) combination.
+
+    Args:
+        expert_entry: (layer, expert_id, diff_pct) tuple
+        rank: 1-indexed rank of this expert by diff (for subdir naming)
+        mean_diff: [n_positions, d_model] tensor for this expert
+        position: int, the token position index to use
+        base_output_dir: root output dir for this run
+        coeff_override: coeff to use for the actadd intervention
+    """
+    layer, expert_id, diff_pct = expert_entry
+    coeff = coeff_override
+
+    output_dir = base_output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n" + "#"*80)
+    print(f"# EXPERIMENT: rank={rank} (L{layer} E{expert_id}, diff={diff_pct:.2f}%), "
+          f"position={position}, coeff={coeff}")
+    print(f"# Output: {output_dir}")
+    print("#" + "#"*79)
+
+    direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+
+    metadata = {
+        "layer": int(layer),
+        "expert": int(expert_id),
+        "diff_pct": float(diff_pct),
+        "rank": rank,
+        "position": position,
+        "coeff": coeff,
+        "direction_norm": direction.norm().item(),
+        "selection_method": "judge_grid"
+    }
+    with open(os.path.join(output_dir, "experiment_metadata.json"), 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    expert_info = (layer, expert_id, direction)
+
+    def _generate_eval(dataset_name, coeff_val, intervention_label, eval_methodologies, dataset=None):
+        completions_dir = os.path.join(output_dir, 'completions', intervention_label)
+        os.makedirs(completions_dir, exist_ok=True)
+
+        if dataset is None:
+            dataset = load_dataset(dataset_name)
+            dataset = random.sample(dataset, min(100, len(dataset)))
+
+        fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
+            model_base,
+            layer_idx=layer,
+            expert_id=expert_id,
+            direction=direction,
+            coeff=coeff_val
+        )
+
+        print(f"\nGenerating completions for {dataset_name} with {intervention_label}...")
+        completions = model_base.generate_completions(
+            dataset,
+            fwd_pre_hooks=fwd_pre_hooks,
+            fwd_hooks=fwd_hooks,
+            max_new_tokens=args.max_new_tokens
+        )
+
+        completions_path = os.path.join(completions_dir, f"{dataset_name}_completions.json")
+        with open(completions_path, "w", encoding="utf-8") as f:
+            json.dump(completions, f, indent=4, ensure_ascii=False)
+        print(f"Saved completions to: {completions_path}")
+
+        evaluation = evaluate_jailbreak(
+            completions=completions,
+            methodologies=eval_methodologies,
+            evaluation_path=os.path.join(completions_dir, f"{dataset_name}_evaluations.json"),
+        )
+        eval_path = os.path.join(completions_dir, f"{dataset_name}_evaluations.json")
+        with open(eval_path, "w", encoding="utf-8") as f:
+            json.dump(evaluation, f, indent=4, ensure_ascii=False)
+        print(f"Saved evaluations to: {eval_path}")
+
+    # Baseline
+    if not args.skip_baseline:
+        print("\n  " + "-"*60)
+        print("  BASELINE (No Intervention)")
+        print("  " + "-"*60)
+
+        for dataset_name in cfg.evaluation_datasets:
+            _generate_eval(dataset_name, 0.0, 'baseline', cfg.jailbreak_eval_methodologies)
+
+        if not args.skip_harmless:
+            _generate_eval('harmless', 0.0, 'baseline', cfg.refusal_eval_methodologies, dataset=harmless_test)
+
+    # ActAdd intervention
+    print("\n  " + "-"*60)
+    print(f"  ACTADD INTERVENTION (coeff={-coeff})")
+    print("  " + "-"*60)
+
+    for dataset_name in cfg.evaluation_datasets:
+        _generate_eval(dataset_name, -coeff, 'actadd', cfg.jailbreak_eval_methodologies)
+
+    if not args.skip_harmless:
+        _generate_eval('harmless', coeff, 'actadd', cfg.refusal_eval_methodologies, dataset=harmless_test)
+
+
+def run_single_allex_experiment(
+    args, cfg, model_base, model_card,
+    all_layer_directions, best_layer, best_position, best_coeff,
+    harmful_test, harmless_test, output_dir
+):
+    """Run full evaluation for the best allex (layer, position, coeff) combo."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n" + "#"*80)
+    print(f"# ALLEX EXPERIMENT: L{best_layer} pos={best_position} coeff={best_coeff}")
+    print(f"# Output: {output_dir}")
+    print("#" + "#"*79)
+
+    best_dirs = all_layer_directions[best_layer][:, best_position, :]
+    dirs_dev = best_dirs.to(model_base.model.device, dtype=model_base.model.dtype)
+
+    def _generate_eval(dataset_name, coeff_val, intervention_label, eval_methodologies, dataset=None):
+        completions_dir = os.path.join(output_dir, 'completions', intervention_label)
+        os.makedirs(completions_dir, exist_ok=True)
+
+        if dataset is None:
+            dataset = load_dataset(dataset_name)
+            dataset = random.sample(dataset, min(100, len(dataset)))
+
+        fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
+            model_base, layer_idx=best_layer,
+            directions_for_layer=dirs_dev,
+            coeff=coeff_val, model_card=model_card
+        )
+
+        print(f"\nGenerating completions for {dataset_name} with {intervention_label}...")
+        completions = model_base.generate_completions(
+            dataset,
+            fwd_pre_hooks=fwd_pre_hooks,
+            fwd_hooks=fwd_hooks,
+            max_new_tokens=args.max_new_tokens
+        )
+
+        completions_path = os.path.join(completions_dir, f"{dataset_name}_completions.json")
+        with open(completions_path, "w", encoding="utf-8") as f:
+            json.dump(completions, f, indent=4, ensure_ascii=False)
+        print(f"Saved completions to: {completions_path}")
+
+        evaluation = evaluate_jailbreak(
+            completions=completions,
+            methodologies=eval_methodologies,
+            evaluation_path=os.path.join(completions_dir, f"{dataset_name}_evaluations.json"),
+        )
+        eval_path = os.path.join(completions_dir, f"{dataset_name}_evaluations.json")
+        with open(eval_path, "w", encoding="utf-8") as f:
+            json.dump(evaluation, f, indent=4, ensure_ascii=False)
+        print(f"Saved evaluations to: {eval_path}")
+
+    if not args.skip_baseline:
+        print("\n  " + "-"*60)
+        print("  BASELINE (No Intervention)")
+        print("  " + "-"*60)
+
+        for dataset_name in cfg.evaluation_datasets:
+            _generate_eval(dataset_name, 0.0, 'baseline', cfg.jailbreak_eval_methodologies)
+
+        if not args.skip_harmless:
+            _generate_eval('harmless', 0.0, 'baseline', cfg.refusal_eval_methodologies, dataset=harmless_test)
+
+    print("\n  " + "-"*60)
+    print(f"  ACTADD INTERVENTION (coeff={-best_coeff})")
+    print("  " + "-"*60)
+
+    for dataset_name in cfg.evaluation_datasets:
+        _generate_eval(dataset_name, -best_coeff, 'actadd', cfg.jailbreak_eval_methodologies)
+
+    if not args.skip_harmless:
+        _generate_eval('harmless', best_coeff, 'actadd', cfg.refusal_eval_methodologies, dataset=harmless_test)
+
+
+# =============================================================================
+# Main pipeline
+# =============================================================================
+
+def run_pipeline(args):
+    """Run the consolidated expert steering pipeline."""
+
+    # ------------------------------------------------------------------
+    # Determine mode
+    # ------------------------------------------------------------------
+    if args.allex:
+        mode = "allex"
+    elif args.layer is not None and args.position is not None:
+        mode = "by_name_pos"
+    elif args.layer is not None:
+        mode = "by_name"
+    elif args.expert_rank is not None:
+        mode = "rank"
+    else:
+        mode = "threshold"
+
+    # ------------------------------------------------------------------
+    # Print startup header
+    # ------------------------------------------------------------------
     print("="*80)
-    print("EXPERT-SPECIFIC REFUSAL VECTOR PIPELINE")
+    print("EXPERT STEERING PIPELINE")
     print("="*80)
     print(f"Model: {args.model_path}")
-    print(f"Expert threshold: {args.threshold}%")
-    print(f"Coefficient: {args.coeff}")
-    print(f"Normalize mode: {args.normalize}")
+
+    if mode == "threshold":
+        threshold_display = args.threshold if args.threshold is not None else "(from model card)"
+        print(f"Mode: THRESHOLD GRID      (threshold={threshold_display})")
+    elif mode == "allex":
+        print(f"Mode: ALLEX GRID          (all experts, all layers)")
+    elif mode == "rank":
+        print(f"Mode: RANK GRID           (top {args.expert_rank} experts by diff rank)")
+    elif mode == "by_name":
+        print(f"Mode: BY NAME GRID        (L{args.layer} E{args.expert}, grid over positions x coeffs)")
+    elif mode == "by_name_pos":
+        print(f"Mode: BY NAME+POS GRID    (L{args.layer} E{args.expert} position={args.position}, grid over coeffs)")
+
+    print(f"Grid coeffs: {args.grid_coeffs}")
     print(f"Expert type: {args.expert_type}")
+    print(f"Skip harmless: {args.skip_harmless}")
     print("="*80)
 
-    model_alias = f"{os.path.basename(args.model_path)}/expert_steering_t{args.threshold}/sys_prompt_{args.system_prompt}"
+    base_model_name = os.path.basename(args.model_path)
 
-    # Add top_n to alias if not default
-    if args.top_n > 1:
-        model_alias += f"_top{args.top_n}"
-
-    # Create config with CLI args (only override if explicitly specified)
+    # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
     config_kwargs = {
-        "model_alias": model_alias,
+        "model_alias": f"{base_model_name}/expert_steering_{mode}/sys_prompt_{args.system_prompt}",
         "model_path": args.model_path,
-        "coeff": args.coeff,
-        "threshold": args.threshold,
     }
     if args.system_prompt is not None:
         config_kwargs["system_prompt"] = args.system_prompt
@@ -580,362 +1143,488 @@ def run_expert_specific_pipeline(args):
     cfg = Config(**config_kwargs)
     print(f"System prompt: {cfg.system_prompt}")
 
-    # Override evaluation datasets if specified via CLI
     if args.eval_datasets is not None:
         cfg.evaluation_datasets = tuple(args.eval_datasets)
         print(f"Using custom evaluation datasets: {cfg.evaluation_datasets}")
 
-    # Create output directory
-    base_output_dir = os.path.join(cfg.artifact_path(), f"coeff_{args.coeff}")
+    base_output_dir = os.path.join(cfg.artifact_path(), "grid_search")
+    os.makedirs(base_output_dir, exist_ok=True)
 
-    # If skip_select and top_n > 1, use subdirectory for this specific top_n evaluation
-    if args.skip_select and args.top_n > 1:
-        output_dir = os.path.join(base_output_dir, f"top_{args.top_n}_eval")
-    else:
-        output_dir = base_output_dir
-
-    if args.normalize != 'none':
-        output_dir = os.path.join(output_dir, f"normalized_{args.normalize}")
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Load model 
+    # ------------------------------------------------------------------
+    # Load model
+    # ------------------------------------------------------------------
     print("\n" + "="*80)
     print("LOADING MODEL")
     print("="*80)
-    model_base = construct_model_base(args.model_path, system_prompt= cfg.system_prompt)
+    model_base = construct_model_base(args.model_path, system_prompt=cfg.system_prompt)
 
-    # Create model card for MoE-specific operations
     from model_utils.model_card_factory import create_model_card
     model_card = create_model_card(model_base)
     print(f"Model card: {type(model_card).__name__}")
 
+    # Resolve threshold (modes 1, 3, and implicitly 4/5 for diff generation)
+    if args.threshold is not None:
+        threshold = args.threshold
+    else:
+        threshold = model_card.get_expert_steering_thresholds().get('expert_diff_threshold', 15.0)
+    print(f"Expert diff threshold: {threshold}%")
+
+    # ------------------------------------------------------------------
     # Load datasets
+    # ------------------------------------------------------------------
     print("\n" + "="*80)
     print("LOADING DATASETS")
     print("="*80)
-    (harmful_train, harmless_train, harmful_val,
-     harmless_val, harmful_test, harmless_test) = load_and_sample_datasets(cfg)
+    (harmful_train, harmless_train, harmful_val, harmless_val,
+     harmful_test, harmless_test) = load_and_sample_datasets(cfg)
 
     print(f"Raw data:")
     print(f"  Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
     print(f"  Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
     print(f"  Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
 
-    # Filter datasets based on refusal scores
-    print("\nFiltering datasets based on refusal scores...")
-    (harmful_train, harmless_train,
-     harmful_val, harmless_val) = filter_data(
-        cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val
-    )
+    print("\nFiltering training data based on refusal scores...")
+    harmful_train, harmless_train = filter_data(cfg, model_base, harmful_train, harmless_train)
 
-    print(f"\nFiltered data:")
+    print(f"\nFiltered training data:")
     print(f"  Training: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
-    print(f"  Validation: {len(harmful_val)} harmful, {len(harmless_val)} harmless")
-    print(f"  Test: {len(harmful_test)} harmful, {len(harmless_test)} harmless")
+
+    # ------------------------------------------------------------------
+    # Mode 2: ALLEX
+    # ------------------------------------------------------------------
+    if mode == "allex":
+        direction_cache_dir = os.path.join(
+            "runs", base_model_name,
+            "expert_directions",
+            f"sys_prompt_{cfg.system_prompt}",
+            "all_experts"
+        )
+
+        if not args.skip_generate:
+            all_layer_directions = generate_all_expert_directions(
+                model_base, harmful_train, harmless_train,
+                model_card,
+                artifact_dir=direction_cache_dir,
+                batch_size=args.batch_size
+            )
+        else:
+            print("\nSkipping generation, loading from cache...")
+            combined_path = os.path.join(direction_cache_dir, "all_layer_expert_directions.pt")
+            if os.path.exists(combined_path):
+                all_layer_directions = torch.load(combined_path, map_location='cpu')
+            else:
+                all_layer_directions = {}
+                num_layers = model_card.get_num_layers()
+                for layer_idx in range(num_layers):
+                    if not model_card.is_moe_layer(layer_idx):
+                        continue
+                    layer_path = os.path.join(direction_cache_dir, f"layer_{layer_idx}_all_experts.pt")
+                    if os.path.exists(layer_path):
+                        all_layer_directions[layer_idx] = torch.load(layer_path, map_location='cpu')
+            print(f"Loaded directions for {len(all_layer_directions)} MoE layers")
+
+        print("\n" + "="*80)
+        print("ALLEX GRID SEARCH (LAYER x POSITION x COEFF)")
+        print("="*80)
+
+        grid_output_dir = os.path.join(base_output_dir, "allex_grid_search")
+        os.makedirs(grid_output_dir, exist_ok=True)
+
+        best_layer, best_position, best_coeff, all_results = run_allex_grid_search(
+            model_base=model_base,
+            model_card=model_card,
+            all_layer_directions=all_layer_directions,
+            harmful_val=harmful_val,
+            harmless_val=harmless_val,
+            grid_coeffs=args.grid_coeffs,
+            max_new_tokens=args.judge_grid_tokens,
+            n_samples=args.judge_grid_n_samples,
+            batch_size=args.batch_size,
+            output_dir=grid_output_dir
+        )
+
+        with open(os.path.join(grid_output_dir, "allex_grid_results.json"), 'w') as f:
+            json.dump({
+                "best_layer": int(best_layer),
+                "best_position": int(best_position),
+                "best_coeff": float(best_coeff),
+                "n_layers": len(all_layer_directions),
+                "max_new_tokens": args.judge_grid_tokens,
+                "n_samples": args.judge_grid_n_samples,
+                "grid_coeffs": args.grid_coeffs,
+                "results": all_results
+            }, f, indent=2)
+
+        print(f"\nSaved allex grid results to: {grid_output_dir}/allex_grid_results.json")
+
+        # Full evaluation
+        eval_output_dir = os.path.join(base_output_dir, f"allex_L{best_layer}_pos{best_position}_c{best_coeff}")
+        run_single_allex_experiment(
+            args=args, cfg=cfg,
+            model_base=model_base, model_card=model_card,
+            all_layer_directions=all_layer_directions,
+            best_layer=best_layer, best_position=best_position, best_coeff=best_coeff,
+            harmful_test=harmful_test, harmless_test=harmless_test,
+            output_dir=eval_output_dir
+        )
+
+        print("\n" + "="*80)
+        print("PIPELINE COMPLETE")
+        print("="*80)
+        print(f"Results saved under: {base_output_dir}")
+        return
+
+    # ------------------------------------------------------------------
+    # Modes 1, 3, 4, 5 — per-expert directions
+    # ------------------------------------------------------------------
 
     # Select candidate experts
     print("\n" + "="*80)
     print("SELECTING CANDIDATE EXPERTS")
     print("="*80)
 
-    # Get model-specific expert diffs path
     expert_diffs_filename = model_card.get_expert_diffs_filename()
-    expert_diffs_path = f"expert_diffs/{expert_diffs_filename}"
+    expert_diffs_dir = f"expert_diffs/sys_prompt_{cfg.system_prompt}"
+    expert_diffs_path = os.path.join(expert_diffs_dir, expert_diffs_filename)
 
-    # Generate expert diffs if they don't exist
-    if not os.path.exists(expert_diffs_path):
-        print(f"Expert diffs not found at {expert_diffs_path}, generating...")
-        os.makedirs("expert_diffs", exist_ok=True)
-        model_card.generate_expert_diffs(
-            harmful_dataset_path="dataset/splits/harmful_train.json",
-            harmless_dataset_path="dataset/splits/harmless_train.json",
-            output_path=expert_diffs_path,
-            batch_size=args.batch_size
-        )
-        print(f"Expert diffs saved to {expert_diffs_path}")
-
-    candidate_experts = get_candidate_experts(
-        threshold=args.threshold,
-        expert_type=args.expert_type,
-        expert_diffs_path=expert_diffs_path
-    )
-
-    # Save candidate expert info
-    expert_info_path = os.path.join(output_dir, "candidate_experts.json")
-    with open(expert_info_path, 'w') as f:
-        expert_info = [
-            {"layer": int(layer), "expert": int(expert), "diff_pct": float(diff)}
-            for layer, expert, diff in candidate_experts
-        ]
-        json.dump(expert_info, f, indent=2)
-
-    # Generate expert-specific directions (always in base_output_dir, independent of normalize)
-    if not args.skip_generate:
-        expert_directions, expert_scales = generate_expert_specific_directions(
-            model_base,
-            harmful_train,
-            harmless_train,
-            candidate_experts,
-            artifact_dir=os.path.join(cfg.artifact_path(), "expert_directions"),
-            batch_size=args.batch_size
-        )
+    if mode in ("by_name", "by_name_pos"):
+        # Modes 4 & 5: single named expert — no threshold needed
+        candidate_experts = [(args.layer, args.expert, 0.0)]
+        expert_ranks = [1]
+        print(f"  Named expert: L{args.layer} E{args.expert} (diff_pct unknown; 0.0 placeholder)")
     else:
-        print("\nSkipping generation, loading from cache...")
-        cache_dir = cfg.artifact_path()
-        directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
-        expert_directions = torch.load(directions_path)
+        # Modes 1 & 3: load or generate expert diffs
+        if not os.path.exists(expert_diffs_path):
+            print(f"Expert diffs not found at {expert_diffs_path}, generating...")
+            os.makedirs(expert_diffs_dir, exist_ok=True)
+            model_card.generate_expert_diffs(
+                harmful_dataset_path="dataset/splits/harmful_train.json",
+                harmless_dataset_path="dataset/splits/harmless_train.json",
+                output_path=expert_diffs_path,
+                batch_size=args.batch_size
+            )
+            print(f"Expert diffs saved to {expert_diffs_path}")
 
-        # Load expert scales if available (needed for expert_scale normalization)
-        expert_scales = None
-        scales_path = os.path.join(base_output_dir, "expert_directions", "all_expert_scales.pt")
-        if os.path.exists(scales_path):
-            expert_scales = torch.load(scales_path)
-            print(f"  Loaded expert scales from: {scales_path}")
-        elif args.normalize == 'expert_scale':
-            print(f"  WARNING: No expert scales found at {scales_path}")
-            print(f"  Falling back to normalize='unit'. Re-run without --skip_generate to compute scales.")
-            args.normalize = 'unit'
-
-
-    # Select best direction(s)
-    if not args.skip_select:
-        selection_result = select_best_expert_direction(
-            model_base,
-            harmful_val,
-            harmless_val,
-            expert_directions,
-            artifact_dir=os.path.join(output_dir, "selection"),
-            top_n=args.top_n,
-            model_card=model_card,
-            normalize=args.normalize,
-            expert_scales=expert_scales
+        candidate_experts = get_candidate_experts(
+            threshold=threshold,
+            expert_type=args.expert_type,
+            expert_diffs_path=expert_diffs_path,
         )
 
-        # Handle single vs multiple directions
-        if args.top_n == 1:
-            pos, layer, expert_id, direction, mu_b = selection_result
-
-            # Save selected direction (single)
-            metadata = {
-                "top_n": 1,
-                "pos": int(pos),
-                "layer": int(layer),
-                "expert_id": int(expert_id),
-                "threshold": args.threshold,
-                "expert_type": args.expert_type
-            }
-
-            with open(os.path.join(output_dir, "direction_metadata.json"), 'w') as f:
-                json.dump(metadata, f, indent=2)
-
-            torch.save(direction, os.path.join(output_dir, "direction.pt"))
-            torch.save(mu_b, os.path.join(output_dir, "mu_b.pt"))
-
+        if mode == "rank":
+            # Mode 3: top N experts
+            n = args.expert_rank
+            if n > len(candidate_experts):
+                print(f"ERROR: Requested top {n} experts but only {len(candidate_experts)} above threshold")
+                sys.exit(1)
+            expert_ranks = list(range(1, n + 1))
+            print(f"\nMode 3: using top {n} experts (ranks 1-{n})")
         else:
-            selected_directions, mu_b = selection_result
+            # Mode 1: all experts above threshold
+            expert_ranks = list(range(1, len(candidate_experts) + 1))
+            n_selected = len(candidate_experts)
+            print(f"\nMode 1: threshold={threshold}%, {n_selected} experts selected")
+            # Update mode header now that we know the count
+            print(f"Mode: THRESHOLD GRID      (threshold={threshold}%, {n_selected} experts selected)")
 
-            # Save selected directions (multiple)
-            metadata = {
-                "top_n": args.top_n,
-                "threshold": args.threshold,
-                "expert_type": args.expert_type,
-                "directions": [
-                    {
-                        "pos": int(pos),
-                        "layer": int(layer),
-                        "expert_id": int(expert_id)
-                    }
-                    for pos, layer, expert_id, _ in selected_directions
-                ]
-            }
+    print(f"\nExperts to evaluate:")
+    for rank in expert_ranks:
+        layer, expert_id, diff_pct = candidate_experts[rank - 1]
+        print(f"  Rank {rank}: Layer {layer}, Expert {expert_id}, Diff {diff_pct:.2f}%")
 
-            with open(os.path.join(output_dir, "direction_metadata.json"), 'w') as f:
-                json.dump(metadata, f, indent=2)
+    # Direction generation / loading
+    directions_dir = os.path.join(base_output_dir, "expert_directions")
 
-            # Save all directions
-            directions_dict = {
-                f"direction_{i}": direction
-                for i, (_, _, _, direction) in enumerate(selected_directions)
-            }
-            torch.save(directions_dict, os.path.join(output_dir, "directions.pt"))
-            torch.save(mu_b, os.path.join(output_dir, "mu_b.pt"))
+    print("\n" + "="*80)
+    print("GENERATING / LOADING DIRECTIONS")
+    print("="*80)
 
-    else:
-        print("\nSkipping selection, loading from cache...")
+    expert_data = {}  # rank -> (mean_diff, activation_rms)
 
-        # Load from base_output_dir (where the cached data is)
-        cache_dir = base_output_dir if args.skip_select else output_dir
+    for rank in expert_ranks:
+        layer, expert_id, diff_pct = candidate_experts[rank - 1]
+        save_path = os.path.join(directions_dir, f"expert_L{layer}_E{expert_id}_mean_diff.pt")
+        scale_path = os.path.join(directions_dir, f"expert_L{layer}_E{expert_id}_scale.pt")
 
-        # Load filtered evaluations JSON
-        evaluations_path = os.path.join(cache_dir, "selection", "expert_direction_evaluations_filtered.json")
-        with open(evaluations_path, 'r') as f:
-            filtered_evals = json.load(f)
+        if not args.skip_generate:
+            os.makedirs(directions_dir, exist_ok=True)
 
-        # Load all expert directions
-        all_directions_path = os.path.join(cache_dir, "expert_directions", "all_expert_directions.pt")
-        all_expert_directions = torch.load(all_directions_path)
+            mean_diff, activation_rms = get_expert_mean_diff(
+                model_base,
+                harmful_train,
+                harmless_train,
+                layer,
+                expert_id,
+                batch_size=args.batch_size
+            )
 
-        # Load mu_b
-        mu_b = torch.zeros(list(all_expert_directions.values())[0].size(-1))
-
-        # Take top n from filtered evaluations
-        n_to_load = min(args.top_n, len(filtered_evals))
-
-        if n_to_load < args.top_n:
-            print(f"Warning: Requested top_n={args.top_n} but only {len(filtered_evals)} directions available")
-
-        if args.top_n == 1:
-            # Single direction
-            entry = filtered_evals[0]
-            pos = entry["position"]
-            layer = entry["layer"]
-            expert_id = entry["expert"]
-
-            # Load full direction tensor and extract the specific position
-            full_direction = all_expert_directions[(layer, expert_id)]
-            direction = full_direction[pos]
-
-            print(f"\nLoaded direction from JSON:")
-            print(f"  Position: {pos}")
-            print(f"  Layer: {layer}")
-            print(f"  Expert: {expert_id}")
-            print(f"  Refusal score: {entry['refusal_score']:.4f}")
-            print(f"  Steering score: {entry['steering_score']:.4f}")
-            print(f"  KL Divergence: {entry['kl_div_score']:.4f}")
-
+            torch.save(mean_diff, save_path)
+            torch.save(activation_rms, scale_path)
+            print(f"  Saved: {save_path}")
         else:
-            # Multiple directions
-            selected_directions = []
+            print(f"\n  Loading rank {rank} (L{layer} E{expert_id}) from cache...")
+            mean_diff = torch.load(save_path)
+            print(f"    Direction: {save_path}")
 
-            print(f"\nLoading top {n_to_load} directions from JSON:")
-            for i in range(n_to_load):
-                entry = filtered_evals[i]
-                pos = entry["position"]
-                layer = entry["layer"]
-                expert_id = entry["expert"]
+            activation_rms = None
+            if os.path.exists(scale_path):
+                activation_rms = torch.load(scale_path)
+                print(f"    Scale: {scale_path}")
 
-                # Load full direction tensor and extract the specific position
-                full_direction = all_expert_directions[(layer, expert_id)]
-                direction = full_direction[pos]
+        expert_data[rank] = (mean_diff, activation_rms)
 
-                selected_directions.append((pos, layer, expert_id, direction))
+    # ------------------------------------------------------------------
+    # Mode 5: BY NAME+POS — grid over coeffs only (position fixed)
+    # ------------------------------------------------------------------
+    if mode == "by_name_pos":
+        layer, expert_id, diff_pct = candidate_experts[0]
+        mean_diff, _ = expert_data[1]
+        position = args.position
 
-                print(f"\n  [{i+1}/{n_to_load}]")
-                print(f"    Position: {pos}")
-                print(f"    Layer: {layer}")
-                print(f"    Expert: {expert_id}")
-                print(f"    Refusal score: {entry['refusal_score']:.4f}")
-                print(f"    Steering score: {entry['steering_score']:.4f}")
-                print(f"    KL Divergence: {entry['kl_div_score']:.4f}")
-
-    # Evaluation
-    if not args.skip_eval:
         print("\n" + "="*80)
-        print("EVALUATION")
+        print(f"MODE 5: COEFF GRID (L{layer} E{expert_id}, position={position})")
         print("="*80)
 
-        # Prepare expert_info for evaluation - handle single vs multiple
-        def normalize_direction(direction_vec, layer_idx, expert_id_val, pos_val):
-            """Apply normalization based on args.normalize mode."""
-            orig_norm = direction_vec.norm().item()
-            if args.normalize == 'unit':
-                direction_vec = direction_vec / direction_vec.norm()
-                print(f"  Normalized direction (L{layer_idx} E{expert_id_val}): "
-                      f"norm {orig_norm:.4f} -> 1.0 (unit)")
-            elif args.normalize == 'expert_scale':
-                scale = expert_scales[(layer_idx, expert_id_val)][pos_val].to(direction_vec.device)
-                direction_vec = direction_vec / direction_vec.norm() * scale
-                new_norm = direction_vec.norm().item()
-                print(f"  Normalized direction (L{layer_idx} E{expert_id_val}): "
-                      f"norm {orig_norm:.4f} -> {new_norm:.4f} (expert_scale={scale.item():.4f})")
-            else:
-                print(f"  Direction (L{layer_idx} E{expert_id_val}): norm {orig_norm:.4f} (no normalization)")
-            return direction_vec
+        # Use run_grid_search with a single (rank=1, position=fixed) entry
+        # We build a mini candidate_experts list with position baked in.
+        # We'll call a simplified single-position grid.
 
-        if args.top_n == 1:
-            # Move direction to model device and dtype
-            direction = direction.to(model_base.model.device, dtype=model_base.model.dtype)
-            direction = normalize_direction(direction, layer, expert_id, pos)
-            expert_info = (layer, expert_id, direction)
+        print(f"  Grid over {len(args.grid_coeffs)} coeffs (position fixed at {position})")
+        print(f"  Coeffs: {args.grid_coeffs}")
+
+        harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
+        harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
+
+        if hasattr(model_card, 'get_expert_steering_thresholds'):
+            kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
         else:
-            # Move all directions to model device and dtype
-            expert_info_list = []
-            for pos_i, layer_i, expert_id_i, direction_i in selected_directions:
-                direction_i = direction_i.to(model_base.model.device, dtype=model_base.model.dtype)
-                direction_i = normalize_direction(direction_i, layer_i, expert_id_i, pos_i)
-                expert_info_list.append((layer_i, expert_id_i, direction_i))
-            expert_info = expert_info_list
-        if not args.skip_baseline:
-            # Baseline (no intervention)
-            print("\n" + "-"*80)
-            print("BASELINE (No Intervention)")
-            print("-"*80)
-    
-            # Harmful test set
-            for dataset_name in cfg.evaluation_datasets:
-                generate_and_evaluate_completions(
-                    model_base,
-                    dataset_name,
-                    expert_info,
-                    coeff=0.0,  # No intervention
-                    output_dir=output_dir,
-                    intervention_label='baseline',
-                    eval_methodologies=cfg.jailbreak_eval_methodologies,
-                    max_new_tokens=args.max_new_tokens
-                )
-    
-            # Harmless test set
-            generate_and_evaluate_completions(
-                model_base,
-                'harmless',
-                expert_info,
-                coeff=0.0,
-                output_dir=output_dir,
-                intervention_label='baseline',
-                eval_methodologies=cfg.refusal_eval_methodologies,
-                max_new_tokens=args.max_new_tokens,
-                dataset=harmless_test
-            )
+            kl_threshold = 1.0
 
-        # ActAdd intervention (suppress refusal)
-        print("\n" + "-"*80)
-        print(f"ACTADD INTERVENTION (coeff={-args.coeff})")
-        print("-"*80)
+        from tqdm import tqdm
+        import math
 
-        # Harmful test set
-        for dataset_name in cfg.evaluation_datasets:
-            generate_and_evaluate_completions(
-                model_base,
-                dataset_name,
-                expert_info,
-                coeff=-args.coeff,  # Negative to suppress refusal
-                output_dir=output_dir,
-                intervention_label='actadd',
-                eval_methodologies=cfg.jailbreak_eval_methodologies,
-                max_new_tokens=args.max_new_tokens
-            )
+        sample = harmful_val[:args.judge_grid_n_samples]
+        direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
+        mlp_module = model_card.get_mlp_module(layer)
 
-        # Harmless test set (with positive coeff to induce refusal)
-        generate_and_evaluate_completions(
-            model_base,
-            'harmless',
-            expert_info,
-            coeff=args.coeff,  # Positive to induce refusal
-            output_dir=output_dir,
-            intervention_label='actadd',
-            eval_methodologies=cfg.refusal_eval_methodologies,
-            max_new_tokens=args.max_new_tokens,
-            dataset=harmless_test
+        baseline_scores = get_refusal_scores(
+            model_base.model, harmful_val_instructions,
+            model_base.tokenize_instructions_fn, model_base.refusal_toks,
+            fwd_hooks=[], batch_size=args.batch_size,
+            tokenizer=model_base.tokenizer,
+            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
         )
+        baseline_mean = baseline_scores.mean().item()
+        print(f"  Baseline refusal score: {baseline_mean:.4f}")
+
+        print(f"  Collecting baseline harmless logits...")
+        baseline_harmless_logits = get_last_position_logits(
+            model=model_base.model,
+            tokenizer=model_base.tokenizer,
+            instructions=harmless_val_instructions,
+            tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+            fwd_pre_hooks=[],
+            fwd_hooks=[],
+            batch_size=args.batch_size
+        )
+
+        stage1_results = []
+        with tqdm(total=len(args.grid_coeffs), desc="  Coeff sweep") as pbar:
+            for coeff in args.grid_coeffs:
+                hook_fn = get_expert_weighted_activation_addition_hook(
+                    direction=direction,
+                    expert_id=expert_id,
+                    coeff=-coeff,
+                    model_card=model_card
+                )
+                fwd_hooks = [(mlp_module, hook_fn)]
+
+                scores = get_refusal_scores(
+                    model_base.model, harmful_val_instructions,
+                    model_base.tokenize_instructions_fn, model_base.refusal_toks,
+                    fwd_hooks=fwd_hooks, batch_size=args.batch_size,
+                    tokenizer=model_base.tokenizer,
+                    refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
+                )
+                mean_score = scores.mean().item()
+
+                intervention_logits = get_last_position_logits(
+                    model=model_base.model,
+                    tokenizer=model_base.tokenizer,
+                    instructions=harmless_val_instructions,
+                    tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                    fwd_pre_hooks=[],
+                    fwd_hooks=fwd_hooks,
+                    batch_size=args.batch_size
+                )
+                kl_div = kl_div_fn(
+                    baseline_harmless_logits, intervention_logits, mask=None
+                ).mean(dim=0).item()
+                passed_kl = kl_div <= kl_threshold
+
+                stage1_results.append({
+                    "rank": 1,
+                    "layer": layer,
+                    "expert_id": expert_id,
+                    "diff_pct": diff_pct,
+                    "position": position,
+                    "coeff": coeff,
+                    "refusal_score": mean_score,
+                    "refusal_reduction": baseline_mean - mean_score,
+                    "kl_div": kl_div,
+                    "passed_kl": passed_kl,
+                })
+                pbar.update(1)
+                pbar.set_postfix_str(f"score={mean_score:.3f} kl={kl_div:.3f}{'✓' if passed_kl else '✗'}")
+
+        passing = [r for r in stage1_results if r["passed_kl"]]
+        passing.sort(key=lambda x: x["refusal_score"])
+        if not passing:
+            print(f"  WARNING: No combos passed KL filter. Using lowest-KL coeff.")
+            stage1_results.sort(key=lambda x: x["kl_div"])
+            passing = stage1_results[:1]
+
+        n_judge = max(math.ceil(len(args.grid_coeffs) * 0.025), min(5, len(passing)))
+        candidates = passing[:n_judge]
+
+        print(f"\n  Stage 2: judging top {len(candidates)} coeff candidates...")
+
+        grid_output_dir = os.path.join(base_output_dir, f"mode5_L{layer}_E{expert_id}_pos{position}")
+        os.makedirs(grid_output_dir, exist_ok=True)
+        combos_dir = os.path.join(grid_output_dir, "combos")
+        os.makedirs(combos_dir, exist_ok=True)
+
+        best_asr = -1.0
+        best_coeff = None
+
+        for i, candidate in enumerate(candidates):
+            coeff = candidate["coeff"]
+            print(f"\n  [{i+1}/{len(candidates)}] coeff={coeff} (refusal={candidate['refusal_score']:.4f})")
+
+            fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
+                model_base,
+                layer_idx=layer,
+                expert_id=expert_id,
+                direction=direction,
+                coeff=-coeff
+            )
+
+            completions = model_base.generate_completions(
+                sample,
+                fwd_pre_hooks=fwd_pre_hooks,
+                fwd_hooks=fwd_hooks,
+                max_new_tokens=args.judge_grid_tokens,
+                batch_size=args.batch_size
+            )
+
+            eval_path = os.path.join(combos_dir, f"L{layer}_E{expert_id}_pos{position}_c{coeff}_eval.json")
+            evaluation = evaluate_jailbreak(
+                completions=completions,
+                methodologies=["openai"],
+                evaluation_path=eval_path,
+                openai_delay=0.1
+            )
+
+            asr = evaluation.get("openai_success_rate", 0.0)
+            counts = evaluation.get("openai_overall_counts", {})
+            print(f"    ASR={asr:.2%} (full={counts.get('full_response',0)}, "
+                  f"refusal={counts.get('refusal',0)}, non_response={counts.get('non_response',0)})")
+
+            candidate.update({"asr": asr, **{k: counts.get(k, 0)
+                                              for k in ["full_response", "refusal", "non_response"]}})
+
+            if asr > best_asr:
+                best_asr = asr
+                best_coeff = coeff
+
+        all_results = sorted(candidates, key=lambda x: -x.get("asr", -1)) + \
+                      [r for r in stage1_results if r not in candidates]
+
+        with open(os.path.join(grid_output_dir, "coeff_grid_results.json"), 'w') as f:
+            json.dump({
+                "best_layer": layer, "best_expert_id": expert_id,
+                "best_position": position, "best_coeff": best_coeff,
+                "results": all_results
+            }, f, indent=2)
+
+        if best_coeff is not None:
+            print(f"\n  Best: coeff={best_coeff}, ASR={best_asr:.2%}")
+            run_single_experiment(
+                args=args, cfg=cfg, model_base=model_base,
+                expert_entry=(layer, expert_id, diff_pct), rank=1,
+                mean_diff=mean_diff, position=position,
+                harmful_test=harmful_test, harmless_test=harmless_test,
+                base_output_dir=os.path.join(base_output_dir, f"mode5_L{layer}_E{expert_id}_pos{position}_c{best_coeff}"),
+                coeff_override=best_coeff
+            )
+
+        print("\n" + "="*80)
+        print("PIPELINE COMPLETE")
+        print("="*80)
+        print(f"Results saved under: {base_output_dir}")
+        return
+
+    # ------------------------------------------------------------------
+    # Modes 1, 3, 4: run_grid_search (judge grid over experts x positions x coeffs)
+    # ------------------------------------------------------------------
+    print("\n" + "="*80)
+    print("JUDGE GRID SEARCH")
+    print("="*80)
+
+    grid_output_dir = os.path.join(base_output_dir, "judge_grid_search")
+    os.makedirs(grid_output_dir, exist_ok=True)
+
+    best_rank, best_position, best_coeff, all_results = run_grid_search(
+        model_base=model_base,
+        model_card=model_card,
+        expert_data=expert_data,
+        candidate_experts=candidate_experts,
+        expert_ranks=expert_ranks,
+        harmful_val=harmful_val,
+        harmless_val=harmless_val,
+        grid_coeffs=args.grid_coeffs,
+        max_new_tokens=args.judge_grid_tokens,
+        n_samples=args.judge_grid_n_samples,
+        batch_size=args.batch_size,
+        output_dir=grid_output_dir
+    )
+
+    best_layer, best_expert_id, best_diff_pct = candidate_experts[best_rank - 1]
+
+    with open(os.path.join(grid_output_dir, "judge_grid_results.json"), 'w') as f:
+        json.dump({
+            "best_rank": best_rank,
+            "best_layer": best_layer,
+            "best_expert_id": best_expert_id,
+            "best_position": best_position,
+            "best_coeff": best_coeff,
+            "n_experts": len(expert_ranks),
+            "max_new_tokens": args.judge_grid_tokens,
+            "n_samples": args.judge_grid_n_samples,
+            "results": all_results
+        }, f, indent=2)
+
+    # Full evaluation with best combo
+    best_mean_diff, _ = expert_data[best_rank]
+    print(f"\n  Running full evaluation: L{best_layer} E{best_expert_id} "
+          f"pos={best_position} coeff={best_coeff}")
+    run_single_experiment(
+        args=args, cfg=cfg, model_base=model_base,
+        expert_entry=(best_layer, best_expert_id, best_diff_pct),
+        rank=best_rank,
+        mean_diff=best_mean_diff,
+        position=best_position,
+        harmful_test=harmful_test, harmless_test=harmless_test,
+        base_output_dir=base_output_dir,
+        coeff_override=best_coeff
+    )
 
     print("\n" + "="*80)
     print("PIPELINE COMPLETE")
     print("="*80)
-    print(f"Results saved to: {output_dir}")
-
+    print(f"Results saved under: {base_output_dir}")
 
 
 if __name__ == "__main__":
     args = parse_arguments()
-    run_expert_specific_pipeline(args)
+    run_pipeline(args)
