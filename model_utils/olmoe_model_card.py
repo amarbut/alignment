@@ -107,5 +107,6 @@ class OLMoEModelCard(ModelCard):
         return {
             "kl_threshold": 2.0,
             "steering_score_threshold": -20.0,
-            "prune_layer_percentage": 0.0
+            "prune_layer_percentage": 0.0,
+            "expert_diff_threshold": 7.0,
         }
