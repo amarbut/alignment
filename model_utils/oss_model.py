@@ -8,7 +8,6 @@ from torch import Tensor
 from jaxtyping import Int, Float
 
 from model_utils.model_base import ModelBase
-from model_utils.hf_cache_config import set_hf_cache
 from openai_harmony import load_harmony_encoding, HarmonyEncodingName, Role, Message, Conversation, DeveloperContent, SystemContent
 
 
@@ -82,9 +81,6 @@ def act_add_oss_weights(model, direction: Float[Tensor, "d_model"], coeff, layer
 class OSSModel(ModelBase):
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
-        # Set HF cache location for OSS models
-        set_hf_cache('oss')
-
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=dtype,

@@ -52,7 +52,7 @@ def construct_model_base(model_path: str, system_prompt: Optional[str] = None) -
     """
     # IMPORTANT: Set HF cache BEFORE importing any model modules
     # HuggingFace libraries cache env vars at import time, so this must happen first
-    set_hf_cache_from_path(model_path)
+    set_hf_cache_from_path(model_path, verbose=False)
     
     model_path_lower = model_path.lower()
 
