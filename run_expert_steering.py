@@ -247,8 +247,7 @@ def parse_arguments():
         type=str,
         nargs='+',
         default=None,
-        help='Evaluation datasets (default: uses config). Options: jailbreakbench, advbench, '
-             'tdc2023, maliciousinstruct, strongreject, harmbench_test'
+        help='Evaluation datasets (default: uses config). Options: jailbreakbench, advbench, tdc2023, maliciousinstruct, strongreject, harmbench_test'
     )
 
     return parser.parse_args()
