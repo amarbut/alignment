@@ -186,9 +186,9 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        '--skip_generate',
+        '--force_generate',
         action='store_true',
-        help='Skip direction generation and load from cache'
+        help='Recompute and overwrite cached directions even if they already exist'
     )
 
     parser.add_argument(
@@ -345,7 +345,7 @@ def _get_shared_cache_dir(base_model_name, system_prompt):
 def _load_or_compute_layer_directions(
     layer_idx, expert_ids_needed,
     model_base, harmful_train, harmless_train,
-    batch_size, cache_dir, skip_generate=False
+    batch_size, cache_dir, force_generate=False
 ):
     """
     Load cached expert directions for a layer, computing any that are missing.
@@ -358,8 +358,8 @@ def _load_or_compute_layer_directions(
 
     Args:
         expert_ids_needed: list of expert_id ints required by the caller
-        skip_generate: if True, raise RuntimeError instead of computing
-                       any expert that is not already cached
+        force_generate: if True, ignore the cache and recompute all requested
+                        experts, overwriting any previously cached values
 
     Returns:
         dict {expert_id: tensor[n_pos, d_model]}
@@ -368,20 +368,12 @@ def _load_or_compute_layer_directions(
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = os.path.join(cache_dir, f"layer_{layer_idx}.pt")
 
-    # Load existing cache
+    # Load existing cache (skipped when force_generate)
     cached = {}
-    if os.path.exists(cache_path):
+    if not force_generate and os.path.exists(cache_path):
         cached = torch.load(cache_path, map_location='cpu')
 
     missing = [eid for eid in expert_ids_needed if eid not in cached]
-
-    if missing and skip_generate:
-        raise RuntimeError(
-            f"Layer {layer_idx}: {len(missing)} expert direction(s) not in cache "
-            f"and --skip_generate is set. "
-            f"Missing expert IDs: {missing[:5]}{'...' if len(missing) > 5 else ''}\n"
-            f"  Cache path: {cache_path}"
-        )
 
     if not missing:
         if expert_ids_needed:
@@ -1233,7 +1225,7 @@ def run_pipeline(args):
                 harmless_train=harmless_train,
                 batch_size=args.batch_size,
                 cache_dir=shared_cache_dir,
-                skip_generate=args.skip_generate,
+                force_generate=args.force_generate,
             )
             # Stack in expert-id order: [n_experts, n_pos, d_model]
             all_layer_directions[layer_idx] = torch.stack(
@@ -1378,7 +1370,7 @@ def run_pipeline(args):
             harmless_train=harmless_train,
             batch_size=args.batch_size,
             cache_dir=shared_cache_dir,
-            skip_generate=args.skip_generate,
+            force_generate=args.force_generate,
         )
         for rank, expert_id in rank_expert_pairs:
             expert_data[rank] = layer_cache[expert_id]
