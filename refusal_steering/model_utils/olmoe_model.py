@@ -15,7 +15,6 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List
 
 from model_utils.model_base import ModelBase
-from model_utils.hf_cache_config import set_hf_cache
 
 
 # OLMoE refusal tokens - to be verified with tokenizer
@@ -76,9 +75,6 @@ class OLMoEModel(ModelBase):
     """ModelBase implementation for OLMoE-1B-7B-Instruct."""
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
-        # Set HF cache location
-        set_hf_cache('oss')  # Use same cache as OSS models
-
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=dtype,
