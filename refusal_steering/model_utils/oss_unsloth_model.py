@@ -20,7 +20,6 @@ from torch import Tensor
 from jaxtyping import Float
 
 from model_utils.oss_model import OSSModel
-from model_utils.hf_cache_config import set_hf_cache
 
 
 
@@ -42,9 +41,6 @@ class UnslothOSSModel(OSSModel):
             dtype: Data type (None for auto-detect)
             max_seq_length: Maximum sequence length
         """
-        # Set HF cache location for unsloth models
-        set_hf_cache('unsloth')
-
         print(f"Loading unsloth model from {model_path}...")
 
         model, tokenizer = FastLanguageModel.from_pretrained(

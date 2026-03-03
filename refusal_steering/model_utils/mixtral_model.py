@@ -8,7 +8,6 @@ from torch import Tensor
 from jaxtyping import Int, Float
 
 from model_utils.model_base import ModelBase
-from model_utils.hf_cache_config import set_hf_cache
 
 
 
@@ -64,9 +63,6 @@ def tokenize_instructions_mixtral_chat(
 class MixtralModel(ModelBase):
 
     def _load_model(self, model_path, dtype=torch.bfloat16):
-        # Set HF cache location for Mixtral models
-        set_hf_cache('mixtral')
-
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             torch_dtype=dtype,
