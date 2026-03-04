@@ -155,5 +155,5 @@ class MixtralModelCard(ModelCard):
             "kl_threshold": 2.0,
             "steering_score_threshold": -20.0,
             "prune_layer_percentage": 0.0,
-            "expert_diff_threshold": 15.0,
+            "expert_diff_threshold": 10.0,
         }
