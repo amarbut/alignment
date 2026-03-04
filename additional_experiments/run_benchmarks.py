@@ -161,8 +161,10 @@ def parse_arguments():
                         help='Override all tasks to 0-shot')
 
     # Evaluation settings
-    parser.add_argument('--batch_size', type=int, default=16,
-                        help='Batch size for lm_eval (default: 16)')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size for lm_eval (default: 1)')
+    parser.add_argument('--max_length', type=int, default=2048,
+                        help='Max context length for lm_eval (default: 2048; reduce if OOM)')
 
     # Direction loading
     parser.add_argument('--force_generate', action='store_true',
@@ -300,7 +302,7 @@ def main():
         pretrained=model_base.model,
         tokenizer=model_base.tokenizer,
         batch_size=args.batch_size,
-        max_length=2048,
+        max_length=args.max_length,
     )
 
     # Build task kwargs (num_fewshot, per-task limits)
