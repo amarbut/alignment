@@ -24,9 +24,15 @@ Usage:
 """
 
 # =============================================================================
-# CRITICAL: Set HF cache BEFORE importing any HuggingFace libraries
+# Add parent directory to path so imports resolve from refusal_steering/
 # =============================================================================
 import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# =============================================================================
+# CRITICAL: Set HF cache BEFORE importing any HuggingFace libraries
+# =============================================================================
 import argparse as _argparse_early
 
 _early_parser = _argparse_early.ArgumentParser(add_help=False)
