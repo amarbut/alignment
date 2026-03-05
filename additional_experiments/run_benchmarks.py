@@ -88,7 +88,7 @@ TASK_CONFIG = {
     "arc_easy":         {"num_fewshot": 25},
     "arc_challenge":    {"num_fewshot": 25},
     "winogrande":       {"num_fewshot": 5},
-    "gsm8k":            {"num_fewshot": 5},
+#    "gsm8k":            {"num_fewshot": 5},
     "truthfulqa_mc1":   {"num_fewshot": 0},
 }
 
@@ -99,7 +99,7 @@ TASK_METRIC = {
     "arc_easy":         "acc_norm,none",
     "arc_challenge":    "acc_norm,none",
     "winogrande":       "acc,none",
-    "gsm8k":            "exact_match,strict-match",
+#    "gsm8k":            "exact_match,strict-match",
     "truthfulqa_mc1":   "acc,none",
 }
 
