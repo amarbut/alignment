@@ -157,6 +157,9 @@ def parse_arguments():
                         help='Tasks to evaluate (default: all)')
     parser.add_argument('--hellaswag_limit', type=int, default=1000,
                         help='Max hellaswag examples — simulates TinyHellaSwag (default: 1000)')
+    parser.add_argument('--limit', type=int, default=None,
+                        help='Max examples per task for all tasks (default: None = full dataset). '
+                             '500 is reasonable for capability regression checks.')
     parser.add_argument('--zero_shot', action='store_true',
                         help='Override all tasks to 0-shot')
 
@@ -316,7 +319,12 @@ def main():
         kwargs = {}
         for task in tasks_to_run:
             nfs = 0 if args.zero_shot else TASK_CONFIG.get(task, {}).get("num_fewshot", 0)
-            limit = args.hellaswag_limit if task == "hellaswag" else None
+            if task == "hellaswag":
+                limit = args.hellaswag_limit
+            elif args.limit is not None:
+                limit = args.limit
+            else:
+                limit = None
             kwargs[task] = {"num_fewshot": nfs}
             if limit is not None:
                 kwargs[task]["limit"] = limit
