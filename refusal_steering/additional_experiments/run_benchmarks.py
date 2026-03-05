@@ -80,10 +80,28 @@ from run_expert_steering import _get_shared_cache_dir, _load_or_compute_layer_di
 # Task configuration
 # =============================================================================
 
+# "mmlu" is a group task in lm_eval (57 subtasks); --limit applies per-subtask
+# but most subtasks have <500 questions so it has no effect. Instead we run a
+# curated selection of individual subtask names covering each major domain.
+# Together these give ~10 representative subjects across STEM, CS, law, medicine,
+# humanities, and social sciences — roughly 1,800 questions vs 14,042 for full MMLU.
+MMLU_SUBTASKS = [
+    "mmlu_abstract_algebra",        # STEM / math
+    "mmlu_high_school_physics",     # physics
+    "mmlu_computer_security",       # CS / security
+    "mmlu_machine_learning",        # ML
+    "mmlu_clinical_knowledge",      # medicine
+    "mmlu_nutrition",               # life sciences
+    "mmlu_philosophy",              # humanities
+    "mmlu_high_school_us_history",  # history
+    "mmlu_jurisprudence",           # law
+    "mmlu_international_law",       # international relations
+]
+
 # Standard few-shot counts matching Open LLM Leaderboard / common practice.
 # Set to 0 for all if you only care about the relative baseline vs intervened gap.
 TASK_CONFIG = {
-    "mmlu":             {"num_fewshot": 5},
+    **{t: {"num_fewshot": 5} for t in MMLU_SUBTASKS},
     "hellaswag":        {"num_fewshot": 10},
     "arc_easy":         {"num_fewshot": 25},
     "arc_challenge":    {"num_fewshot": 25},
@@ -94,7 +112,7 @@ TASK_CONFIG = {
 
 # Primary metric to extract per task (lm_eval metric key)
 TASK_METRIC = {
-    "mmlu":             "acc,none",
+    **{t: "acc,none" for t in MMLU_SUBTASKS},
     "hellaswag":        "acc_norm,none",
     "arc_easy":         "acc_norm,none",
     "arc_challenge":    "acc_norm,none",
@@ -371,6 +389,13 @@ def main():
     print("=" * 80)
     _print_table(all_results, tasks_to_run)
 
+    # Add aggregated MMLU mean to each mode's results for easy downstream use
+    for mode, res in all_results.items():
+        subtask_scores = [res.get(t, {}).get("acc,none") for t in MMLU_SUBTASKS if t in tasks_to_run]
+        subtask_scores = [s for s in subtask_scores if s is not None]
+        if subtask_scores:
+            res["mmlu_subtask_avg"] = sum(subtask_scores) / len(subtask_scores)
+
     output_path = os.path.join(out_dir, "benchmark_results.json")
     with open(output_path, 'w') as f:
         json.dump(all_results, f, indent=2)
@@ -422,14 +447,51 @@ def _print_table(all_results, tasks):
     col_w = 14
 
     # Header
-    header = f"  {'Task':<22}" + "".join(f"{m:>{col_w}}" for m in modes)
+    header = f"  {'Task':<28}" + "".join(f"{m:>{col_w}}" for m in modes)
     if len(modes) == 2:
         header += f"{'Δ (int-base)':>{col_w}}"
     print(header)
-    print("  " + "-" * (22 + col_w * (len(modes) + (1 if len(modes) == 2 else 0))))
+    print("  " + "-" * (28 + col_w * (len(modes) + (1 if len(modes) == 2 else 0))))
 
-    for task in tasks:
-        row = f"  {task:<22}"
+    non_mmlu_tasks = [t for t in tasks if t not in MMLU_SUBTASKS]
+    mmlu_tasks_present = [t for t in tasks if t in MMLU_SUBTASKS]
+
+    # Aggregate MMLU subtasks into a single summary row
+    if mmlu_tasks_present:
+        row = f"  {'mmlu (subtask avg)':<28}"
+        vals = []
+        for mode in modes:
+            subtask_scores = [
+                all_results[mode].get(t, {}).get("acc,none")
+                for t in mmlu_tasks_present
+            ]
+            subtask_scores = [s for s in subtask_scores if s is not None]
+            mean = sum(subtask_scores) / len(subtask_scores) if subtask_scores else None
+            vals.append(mean)
+            row += f"{f'{mean:.4f}' if mean is not None else 'N/A':>{col_w}}"
+        if len(modes) == 2 and all(v is not None for v in vals):
+            delta = vals[1] - vals[0]
+            sign = "+" if delta >= 0 else ""
+            row += f"{f'{sign}{delta:.4f}':>{col_w}}"
+        print(row)
+
+        # Optionally show each subtask indented
+        for task in mmlu_tasks_present:
+            short = task.replace("mmlu_", "")
+            row = f"    {short:<26}"
+            vals = []
+            for mode in modes:
+                v = all_results[mode].get(task, {}).get("acc,none")
+                vals.append(v)
+                row += f"{f'{v:.4f}' if v is not None else 'N/A':>{col_w}}"
+            if len(modes) == 2 and all(v is not None for v in vals):
+                delta = vals[1] - vals[0]
+                sign = "+" if delta >= 0 else ""
+                row += f"{f'{sign}{delta:.4f}':>{col_w}}"
+            print(row)
+
+    for task in non_mmlu_tasks:
+        row = f"  {task:<28}"
         vals = []
         for mode in modes:
             metric_key = TASK_METRIC.get(task)
