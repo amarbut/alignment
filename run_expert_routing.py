@@ -285,12 +285,15 @@ def run_pipeline(args):
     print(f"Model card: {type(model_card).__name__}")
     print(f"Number of layers: {model_card.get_num_layers()}")
 
-    # Load or generate expert diffs
-    expert_diffs_file = os.path.join(args.expert_diffs_path, model_card.get_expert_diffs_filename())
+    # Load or generate expert diffs — use sys_prompt subdirectory so each
+    # system prompt variant uses its own routing diffs
+    expert_diffs_dir = os.path.join(args.expert_diffs_path, f'sys_prompt_{sys}')
+    expert_diffs_file = os.path.join(expert_diffs_dir, model_card.get_expert_diffs_filename())
 
     if args.regenerate_diffs or not os.path.exists(expert_diffs_file):
         print(f"\nExpert diffs not found or regeneration requested...")
         print(f"Generating expert diffs for {args.model_path}...")
+        os.makedirs(expert_diffs_dir, exist_ok=True)
         generate_expert_diffs_for_model(
             model_base=model_base,
             model_card=model_card,
@@ -303,7 +306,7 @@ def run_pipeline(args):
         print(f"Expert diffs saved to: {expert_diffs_file}")
 
     print(f"\nLoading expert diffs from: {expert_diffs_file}")
-    expert_diffs = load_expert_diffs(model_card, args.expert_diffs_path)
+    expert_diffs = load_expert_diffs(model_card, expert_diffs_dir)
     print(f"Loaded diffs for {len(expert_diffs)} layers")
 
     # Load test datasets
