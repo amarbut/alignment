@@ -157,8 +157,8 @@ def parse_arguments():
         '--grid_coeffs',
         type=float,
         nargs='+',
-        default=[25, 50, 75, 100, 150, 200, 250, 300],
-        help='Coeff values to search over in grid (default: 25 50 75 100 150 200 250 300)'
+        default=[1, 5, 10, 25, 50, 75, 100, 150, 200, 250, 300, 400],
+        help='Coeff values to search over in grid (default: 1 5 10 25 50 75 100 150 200 250 300 400)'
     )
 
     parser.add_argument(
