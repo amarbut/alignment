@@ -24,36 +24,15 @@ def refusal_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
     refusal_toks: Int[Tensor, 'batch seq'],
     epsilon: Float = 1e-8,
-    temperature = 0.7,
-    top_p = 1.0
 ):
     logits = logits.to(torch.float64)
 
     # we only care about the last position with actual tokens
     logits = logits[:,-1,:]
 
-    # probs = torch.nn.functional.softmax(logits, dim=-1)
-    # refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+    probs = torch.nn.functional.softmax(logits, dim=-1)
+    refusal_probs = probs[:, refusal_toks].sum(dim=-1)
 
-    # nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
-    # score = torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
-
-    # apply temperature and top-p to match generation
-    logits = logits / temperature    # (B, V)
-    probs = torch.softmax(logits, dim=-1) 
-    sorted_probs, sorted_idx = probs.sort(dim=-1, descending=True) 
-    cdf = sorted_probs.cumsum(dim=-1)
-    keep_sorted = cdf <= top_p                          #keep top_p tokens
-    keep_sorted[..., 0] = True                          # always keep top-1
-    
-    keep = torch.zeros_like(probs, dtype=torch.bool)
-    keep.scatter_(1, sorted_idx, keep_sorted)           # redistribute mask to vocab order
-    
-    neg_inf = torch.finfo(logits.dtype).min
-    masked_logits = torch.where(keep, logits, neg_inf)  # mask non-kept logits w/ -inf
-    
-    masked_probs = torch.softmax(masked_logits, dim=-1) #re-calc probs w/ top-p
-    refusal_probs = masked_probs[:, refusal_toks].sum(dim=-1)
     nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
     score = torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
 
@@ -74,15 +53,6 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
         input_ids = tokenized_instructions.input_ids.to(model.device)
         attention_mask = tokenized_instructions.attention_mask.to(model.device)
-
-        # Legacy suffix mechanism: append tokens if specified
-        # (Currently unused - OSS uses template approach, other models don't need it)
-        if refusal_score_suffix_toks is not None:
-            suffix = torch.tensor([refusal_score_suffix_toks] * input_ids.shape[0],
-                                 device=model.device, dtype=torch.long)
-            input_ids = torch.cat([input_ids, suffix], dim=1)
-            suffix_mask = torch.ones_like(suffix)
-            attention_mask = torch.cat([attention_mask, suffix_mask], dim=1)
 
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=fwd_hooks):
             logits = model(input_ids=input_ids, attention_mask=attention_mask).logits
