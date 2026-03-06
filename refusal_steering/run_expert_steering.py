@@ -250,6 +250,14 @@ def parse_arguments():
         help='Evaluation datasets (default: uses config). Options: jailbreakbench, advbench, tdc2023, maliciousinstruct, strongreject, harmbench_test'
     )
 
+    parser.add_argument(
+        '--eval_only',
+        action='store_true',
+        help='Skip grid search; load best expert from existing experiment_metadata.json '
+             'and run evaluation only. Useful for running additional --eval_datasets '
+             'on a previously selected intervention.'
+    )
+
     return parser.parse_args()
 
 
@@ -1178,6 +1186,71 @@ def run_pipeline(args):
     else:
         threshold = model_card.get_expert_steering_thresholds().get('expert_diff_threshold', 15.0)
     print(f"Expert diff threshold: {threshold}%")
+
+    # ------------------------------------------------------------------
+    # EVAL_ONLY: skip grid search, load best expert from existing metadata
+    # ------------------------------------------------------------------
+    if args.eval_only:
+        metadata_path = os.path.join(base_output_dir, "experiment_metadata.json")
+        if not os.path.exists(metadata_path):
+            print(f"\nERROR: --eval_only requires experiment_metadata.json at:\n  {metadata_path}")
+            print("Run the full pipeline first to generate that file.")
+            sys.exit(1)
+
+        with open(metadata_path) as f:
+            meta = json.load(f)
+
+        layer      = meta["layer"]
+        expert_id  = meta["expert"]
+        diff_pct   = meta.get("diff_pct", 0.0)
+        rank       = meta.get("rank", 1)
+        position   = meta["position"]
+        coeff      = meta["coeff"]
+
+        print(f"\n  [eval_only] Loaded metadata: L{layer} E{expert_id} "
+              f"pos={position} coeff={coeff} rank={rank}")
+
+        # Load direction from shared cache (no recomputation)
+        shared_cache_dir = _get_shared_cache_dir(base_model_name, cfg.system_prompt)
+        cache_path = os.path.join(shared_cache_dir, f"layer_{layer}.pt")
+        if not os.path.exists(cache_path):
+            print(f"\nERROR: direction cache not found at {cache_path}")
+            print("Run the full pipeline first to populate the direction cache.")
+            sys.exit(1)
+        layer_cache = torch.load(cache_path, map_location='cpu')
+        if expert_id not in layer_cache:
+            print(f"\nERROR: expert {expert_id} not found in cache {cache_path}")
+            sys.exit(1)
+        mean_diff = layer_cache[expert_id]  # [n_pos, d_model]
+        print(f"  [eval_only] Loaded direction from cache: {cache_path}")
+
+        # Load only harmless test data (eval datasets are loaded inline by run_single_experiment)
+        harmless_test = []
+        if not args.skip_harmless:
+            random.seed(42)
+            harmless_test_full = load_dataset_split(harmtype='harmless', split='test', instructions_only=False)
+            n_test_actual = min(cfg.n_test, len(harmless_test_full))
+            harmless_test = random.sample(harmless_test_full, n_test_actual)
+
+        print(f"  [eval_only] Evaluating on datasets: {cfg.evaluation_datasets}")
+
+        run_single_experiment(
+            args=args, cfg=cfg, model_base=model_base,
+            expert_entry=(layer, expert_id, diff_pct),
+            rank=rank,
+            mean_diff=mean_diff,
+            position=position,
+            harmful_test=[],
+            harmless_test=harmless_test,
+            base_output_dir=base_output_dir,
+            coeff_override=coeff,
+        )
+
+        print("\n" + "="*80)
+        print("EVAL_ONLY COMPLETE")
+        print("="*80)
+        print(f"Results saved under: {base_output_dir}")
+        return
 
     # ------------------------------------------------------------------
     # Load datasets
