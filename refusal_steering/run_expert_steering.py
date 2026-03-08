@@ -23,6 +23,10 @@ Five modes, selected by CLI flags:
     judge grid for one named expert at a fixed position,
     sweeping only grid_coeffs.
 
+  Mode 6 — LAYER GRID (--layer L):
+    judge grid over ALL experts in a specific layer,
+    sweeping experts x 5 positions x grid_coeffs.
+
 Usage examples:
   python run_expert_steering.py --model_path allenai/OLMoE-1B-7B-0924-Instruct
   python run_expert_steering.py --model_path ... --allex
@@ -1107,10 +1111,12 @@ def run_pipeline(args):
     # ------------------------------------------------------------------
     if args.allex:
         mode = "allex"
-    elif args.layer is not None and args.position is not None:
+    elif args.layer is not None and args.expert is not None and args.position is not None:
         mode = "by_name_pos"
-    elif args.layer is not None:
+    elif args.layer is not None and args.expert is not None:
         mode = "by_name"
+    elif args.layer is not None:
+        mode = "layer_all"
     elif args.expert_rank is not None:
         mode = "rank"
     else:
@@ -1131,6 +1137,8 @@ def run_pipeline(args):
         print(f"Mode: ALLEX GRID          (all experts, all layers)")
     elif mode == "rank":
         print(f"Mode: RANK GRID           (top {args.expert_rank} experts by diff rank)")
+    elif mode == "layer_all":
+        print(f"Mode: LAYER GRID          (L{args.layer}, all experts, grid over experts x positions x coeffs)")
     elif mode == "by_name":
         print(f"Mode: BY NAME GRID        (L{args.layer} E{args.expert}, grid over positions x coeffs)")
     elif mode == "by_name_pos":
@@ -1146,8 +1154,9 @@ def run_pipeline(args):
     # ------------------------------------------------------------------
     # Config
     # ------------------------------------------------------------------
+    mode_alias = f"layer{args.layer}" if mode == "layer_all" else mode
     config_kwargs = {
-        "model_alias": f"{base_model_name}/expert_steering_{mode}/sys_prompt_{args.system_prompt}",
+        "model_alias": f"{base_model_name}/expert_steering_{mode_alias}/sys_prompt_{args.system_prompt}",
         "model_path": args.model_path,
     }
     if args.system_prompt is not None:
@@ -1375,6 +1384,12 @@ def run_pipeline(args):
         candidate_experts = [(args.layer, args.expert, 0.0)]
         expert_ranks = [1]
         print(f"  Named expert: L{args.layer} E{args.expert} (diff_pct unknown; 0.0 placeholder)")
+    elif mode == "layer_all":
+        # Mode 6: all experts in a specific layer — enumerate from model card
+        n_experts = model_card.get_num_experts(args.layer)
+        candidate_experts = [(args.layer, eid, 0.0) for eid in range(n_experts)]
+        expert_ranks = list(range(1, n_experts + 1))
+        print(f"\nMode 6: Layer {args.layer}, {n_experts} experts (diff_pct placeholder 0.0)")
     else:
         # Modes 1 & 3: load or generate expert diffs
         if not os.path.exists(expert_diffs_path):
@@ -1639,7 +1654,7 @@ def run_pipeline(args):
         return
 
     # ------------------------------------------------------------------
-    # Modes 1, 3, 4: run_grid_search (judge grid over experts x positions x coeffs)
+    # Modes 1, 3, 4, 6: run_grid_search (judge grid over experts x positions x coeffs)
     # ------------------------------------------------------------------
     print("\n" + "="*80)
     print("JUDGE GRID SEARCH")
