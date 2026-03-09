@@ -112,6 +112,19 @@ def parse_arguments():
         default=100,
         help='Maximum new tokens for generation'
     )
+    parser.add_argument(
+        '--layer',
+        type=int,
+        default=None,
+        help='Layer index for by-name mode: use direction at this specific layer (requires --position)'
+    )
+    parser.add_argument(
+        '--position',
+        type=int,
+        default=None,
+        choices=[-5, -4, -3, -2, -1],
+        help='Token position for by-name mode (-5 to -1, requires --layer)'
+    )
     return parser.parse_args()
 
 
@@ -342,28 +355,46 @@ def run_pipeline(args):
     print(f"Filtered data: {len(harmful_train)} harmful, {len(harmless_train)} harmless")
 
     # Generate or load candidate directions
+    mean_diffs_path = os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt')
+    by_name_mode = args.layer is not None and args.position is not None
+
     if args.skip_generate:
         print("\nLoading cached mean_diffs...")
-        mean_diffs = torch.load(os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt'), map_location="cpu")
+        mean_diffs = torch.load(mean_diffs_path, map_location="cpu")
+    elif by_name_mode and os.path.exists(mean_diffs_path):
+        # By-name mode: reuse cached directions without forcing regeneration
+        print(f"\nLoading cached mean_diffs from: {mean_diffs_path}")
+        mean_diffs = torch.load(mean_diffs_path, map_location="cpu")
     else:
         print("\nGenerating candidate directions...")
         mean_diffs = generate_and_save_candidate_directions(cfg, model_base, harmless_train, harmful_train)
 
     # Select or load direction
-    if args.skip_select:
+    if by_name_mode:
+        pos_idx = args.position + 5  # convert -5..-1 → index 0..4
+        n_layers = model_base.model.config.num_hidden_layers
+        if not (0 <= args.layer < n_layers):
+            raise ValueError(f"--layer must be in [0, {n_layers - 1}], got {args.layer}")
+        layer = args.layer
+        pos = pos_idx
+        direction = mean_diffs[pos_idx, args.layer, :]
+        intervention_label = f"actadd_L{args.layer}_P{args.position}"
+        print(f"\nBy-name mode: layer {layer}, position {args.position} (index {pos_idx})")
+    elif args.skip_select:
         print("\nLoading cached direction...")
         meta = json.load(open(os.path.join(cfg.artifact_path(), 'direction_metadata.json'), "r"))
         layer = meta["layer"]
         pos = meta["pos"]
-        mu_b = torch.load(os.path.join(cfg.artifact_path(), 'mu_b.pt'), map_location="cpu")
         direction = torch.load(os.path.join(cfg.artifact_path(), 'direction.pt'), map_location="cpu")
+        intervention_label = "actadd"
     else:
         print("\nSelecting best direction...")
         layer, pos, direction, mu_b = select_and_save_direction(
             cfg, model_base, harmful_val, harmless_val, mean_diffs
         )
+        intervention_label = "actadd"
 
-    print(f"\nBest direction @ layer {layer}, position {pos}")
+    print(f"\nUsing direction @ layer {layer}, position {pos} (label: {intervention_label})")
 
     # Prepare direction for intervention
     direction = direction.to(model_base.model.device, dtype=getattr(model_base.model, "dtype", torch.float16))
@@ -403,17 +434,17 @@ def run_pipeline(args):
 
     # ActAdd intervention
     print("\n" + "-" * 80)
-    print(f"ACTADD INTERVENTION (coeff={-args.coeff})")
+    print(f"ACTADD INTERVENTION (coeff={-args.coeff}, label={intervention_label})")
     print("-" * 80)
 
     for dataset_name in cfg.evaluation_datasets:
         print(f"\nProcessing {dataset_name}...")
-        generate_and_save_completions(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd', dataset_name)
-        evaluate_and_save_results(cfg, 'actadd', dataset_name, cfg.jailbreak_eval_methodologies)
+        generate_and_save_completions(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, intervention_label, dataset_name)
+        evaluate_and_save_results(cfg, intervention_label, dataset_name, cfg.jailbreak_eval_methodologies)
 
     print("\nProcessing harmless test set (refusal induction)...")
-    generate_and_save_completions(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, 'actadd', 'harmless', dataset=harmless_test)
-    evaluate_and_save_results(cfg, 'actadd', 'harmless', cfg.refusal_eval_methodologies)
+    generate_and_save_completions(cfg, model_base, actadd_refusal_pre_hooks, actadd_refusal_hooks, intervention_label, 'harmless', dataset=harmless_test)
+    evaluate_and_save_results(cfg, intervention_label, 'harmless', cfg.refusal_eval_methodologies)
 
     # Save metadata
     save_metadata(cfg, args, layer, pos)
@@ -422,7 +453,7 @@ def run_pipeline(args):
     print("PIPELINE COMPLETE")
     print("=" * 80)
     print(f"Results saved to: {cfg.artifact_path()}")
-    print(f"Selected direction: Layer {layer}, Position {pos}")
+    print(f"Direction: layer {layer}, position index {pos} (label: {intervention_label})")
 
 
 if __name__ == "__main__":
