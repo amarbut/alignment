@@ -60,7 +60,8 @@ def extract_expert_routing(
     prompts: List[str],
     label: str,
     batch_size: int = 4,
-    last_n_tokens: int = 5
+    last_n_tokens: int = 5,
+    top_k: int = 1,
 ) -> Dict[str, Dict[int, List[int]]]:
     """
     Extract expert routing information for a set of prompts.
@@ -72,6 +73,10 @@ def extract_expert_routing(
         label: Label for this dataset ('harmful' or 'harmless')
         batch_size: Batch size for processing
         last_n_tokens: Number of tokens from the end to analyze
+        top_k: Number of top experts to count per token (1 = top-1 only,
+               model_card.get_routing_top_k() = full top-k routing).
+               Percentages represent fraction of tokens where each expert
+               appeared in the top-k set.
 
     Returns:
         Dictionary mapping layer names to lists of expert activations
@@ -157,17 +162,18 @@ def extract_expert_routing(
 
                         batch_size_cur = len(batch_prompts)
                         seq_len_padded = input_ids.shape[1]
-                        k = top_k_indices.shape[-1]
+                        k_available = top_k_indices.shape[-1]
 
                         # Reshape to (batch_size, seq_len, k)
-                        indices_reshaped = top_k_indices.view(batch_size_cur, seq_len_padded, k)
+                        indices_reshaped = top_k_indices.view(batch_size_cur, seq_len_padded, k_available)
 
                         # Get indices for this sample's analyzed positions
                         sample_indices = indices_reshaped[batch_idx, start_pos:end_pos, :]  # [num_pos, k]
 
-                        # Count each expert that appears in top-k (count top-1 only for consistency)
-                        top_experts = sample_indices[:, 0].cpu().numpy()  # Just top-1
-                        for expert_id in top_experts:
+                        # Count top-k or top-1 experts
+                        cols = min(top_k, k_available)
+                        selected = sample_indices[:, :cols].cpu().numpy().flatten()
+                        for expert_id in selected:
                             layer_expert_counts[layer_idx][int(expert_id)] += 1
 
                     else:
@@ -183,11 +189,14 @@ def extract_expert_routing(
                         # Get logits for this sample's analyzed positions
                         layer_router = router_logits[batch_idx, start_pos:end_pos, :]
 
-                        # Get top expert for each token
-                        top_experts = torch.argmax(layer_router, dim=-1).cpu().numpy()
+                        # Get top-k or top-1 experts for each token
+                        if top_k == 1:
+                            selected = torch.argmax(layer_router, dim=-1).cpu().numpy()  # [num_pos]
+                        else:
+                            k_clamped = min(top_k, layer_router.shape[-1])
+                            selected = torch.topk(layer_router, k=k_clamped, dim=-1).indices.cpu().numpy().flatten()
 
-                        # Count activations
-                        for expert_id in top_experts:
+                        for expert_id in selected:
                             layer_expert_counts[layer_idx][int(expert_id)] += 1
 
                 # Count tokens once per sample (outside layer loop)
@@ -213,6 +222,9 @@ def extract_expert_routing(
 
         layer_expert_percentages[f"layer_{layer_idx}"] = percentages
 
+    # Note: percentages represent fraction of tokens where each expert appeared
+    # in the top-k set (0–100%). With top_k > 1, per-layer percentages sum to
+    # top_k * 100% rather than 100%, since each token contributes k counts.
     return layer_expert_percentages
 
 
@@ -265,7 +277,8 @@ def generate_expert_diffs_for_model(
     batch_size: int = 4,
     last_n_tokens: int = 5,
     num_harmful: Optional[int] = None,
-    num_harmless: int = 200
+    num_harmless: int = 200,
+    use_top_k: bool = False,
 ) -> Dict:
     """
     Generate expert activation frequency differences for any MoE model.
@@ -308,9 +321,12 @@ def generate_expert_diffs_for_model(
 
     harmless_prompts = [item["instruction"] for item in random.sample(harmless_data, min(num_harmless, len(harmless_data)))]
 
+    top_k = model_card.get_routing_top_k() if use_top_k else 1
+
     print(f"Harmful prompts: {len(harmful_prompts)}")
     print(f"Harmless prompts: {len(harmless_prompts)}")
     print(f"Last N tokens: {last_n_tokens}")
+    print(f"Top-k experts per token: {top_k} ({'full routing' if use_top_k else 'top-1 only'})")
 
     # Model info
     num_layers = model_card.get_num_layers()
@@ -334,7 +350,8 @@ def generate_expert_diffs_for_model(
         prompts=harmful_prompts,
         label="harmful",
         batch_size=batch_size,
-        last_n_tokens=last_n_tokens
+        last_n_tokens=last_n_tokens,
+        top_k=top_k,
     )
 
     # Extract routing for harmless prompts
@@ -348,7 +365,8 @@ def generate_expert_diffs_for_model(
         prompts=harmless_prompts,
         label="harmless",
         batch_size=batch_size,
-        last_n_tokens=last_n_tokens
+        last_n_tokens=last_n_tokens,
+        top_k=top_k,
     )
 
     # Compute differences
@@ -370,6 +388,7 @@ def generate_expert_diffs_for_model(
         "num_moe_layers": moe_layers,
         "num_experts": num_experts,
         "routing_mode": model_card.get_expert_routing_mode(),
+        "top_k_counted": top_k,
         "expert_diffs": expert_diffs
     }
 

@@ -130,6 +130,18 @@ class ModelCard(ABC):
         """Return filename for expert diffs: 'oss_expert_diffs.json', etc."""
         pass
 
+    def get_routing_top_k(self) -> int:
+        """
+        Return k (number of experts selected per token).
+        Parsed from get_expert_routing_mode() string, e.g. 'top-8' -> 8.
+        Override in subclass if the routing mode string format differs.
+        """
+        mode = self.get_expert_routing_mode()
+        try:
+            return int(mode.split('-')[1])
+        except (IndexError, ValueError):
+            raise ValueError(f"Cannot parse top-k from routing mode string: {mode!r}")
+
     # === Concrete Methods (Use Pre-Detected Format) ===
 
     def parse_mlp_output(self, output) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
