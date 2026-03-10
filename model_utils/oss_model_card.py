@@ -77,8 +77,8 @@ class OSSModelCard(ModelCard):
         return True
 
     def get_expert_routing_mode(self) -> str:
-        """OSS uses top-2 routing."""
-        return "top-2"
+        """OSS uses top-4 routing."""
+        return "top-4"
 
     def get_expert_diffs_filename(self) -> str:
         """Return filename for OSS expert diffs."""
