@@ -356,7 +356,7 @@ def run_pipeline(args):
 
     # Generate or load candidate directions
     mean_diffs_path = os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt')
-    by_name_mode = args.layer is not None and args.position is not None
+    by_name_mode = args.layer is not None
 
     if args.skip_generate:
         print("\nLoading cached mean_diffs...")
@@ -371,15 +371,30 @@ def run_pipeline(args):
 
     # Select or load direction
     if by_name_mode:
-        pos_idx = args.position + 5  # convert -5..-1 → index 0..4
         n_layers = model_base.model.config.num_hidden_layers
         if not (0 <= args.layer < n_layers):
             raise ValueError(f"--layer must be in [0, {n_layers - 1}], got {args.layer}")
-        layer = args.layer
-        pos = pos_idx
-        direction = mean_diffs[pos_idx, args.layer, :]
-        intervention_label = f"actadd_L{args.layer}_P{args.position}"
-        print(f"\nBy-name mode: layer {layer}, position {args.position} (index {pos_idx})")
+        if args.position is not None:
+            # Layer + position: direct index, no selection needed
+            pos_idx = args.position + 5  # convert -5..-1 → index 0..4
+            layer = args.layer
+            pos = pos_idx
+            direction = mean_diffs[pos_idx, args.layer, :]
+            intervention_label = f"actadd_L{args.layer}_P{args.position}"
+            print(f"\nBy-name mode: layer {layer}, position {args.position} (index {pos_idx})")
+        else:
+            # Layer only: search all 5 positions at that layer
+            layer_slice = mean_diffs[:, args.layer:args.layer + 1, :]  # [5, 1, d_model]
+            print(f"\nBy-name mode: layer {args.layer}, searching all 5 positions...")
+            _, pos, direction, _ = select_and_save_direction(
+                cfg, model_base, harmful_val, harmless_val, layer_slice
+            )
+            layer = args.layer
+            # select_and_save_direction saved layer=0 (slice index); correct it
+            with open(os.path.join(cfg.artifact_path(), 'direction_metadata.json'), "w") as f:
+                json.dump({"pos": pos, "layer": layer}, f, indent=4)
+            intervention_label = f"actadd_L{args.layer}"
+            print(f"\nSelected: layer {layer}, position index {pos}")
     elif args.skip_select:
         print("\nLoading cached direction...")
         meta = json.load(open(os.path.join(cfg.artifact_path(), 'direction_metadata.json'), "r"))
