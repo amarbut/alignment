@@ -177,7 +177,8 @@ class ModelCard(ABC):
         batch_size: int = 4,
         last_n_tokens: int = 5,
         num_harmful: Optional[int] = None,
-        num_harmless: int = 200
+        num_harmless: int = 200,
+        use_top_k: bool = False,
     ) -> Dict:
         """
         Generate expert activation frequency differences.
@@ -193,6 +194,8 @@ class ModelCard(ABC):
             last_n_tokens: Number of tokens from end to analyze
             num_harmful: Number of harmful samples (None = all)
             num_harmless: Number of harmless samples
+            use_top_k: If True, tally all top-k routed experts per token
+                       instead of only the top-1 expert.
 
         Returns:
             Dictionary with expert activation frequency differences
@@ -211,7 +214,8 @@ class ModelCard(ABC):
             batch_size=batch_size,
             last_n_tokens=last_n_tokens,
             num_harmful=num_harmful,
-            num_harmless=num_harmless
+            num_harmless=num_harmless,
+            use_top_k=use_top_k,
         )
 
     # === Router Output Handling (for models with different routing output formats) ===

@@ -154,6 +154,14 @@ def parse_arguments():
         help='Which type of experts to select (default: both)'
     )
 
+    parser.add_argument(
+        '--use_topk_diffs',
+        action='store_true',
+        help='Use top-k expert activation diffs (all k routed experts per token) '
+             'instead of top-1 only. Loads from expert_diffs_topk/; threshold is '
+             'auto-scaled by k if --threshold is not set explicitly.'
+    )
+
     # -------------------------------------------------------------------------
     # Grid search options
     # -------------------------------------------------------------------------
@@ -679,7 +687,8 @@ def run_allex_grid_search(
     harmless_val,  # list of strings
     grid_coeffs=None,
     max_new_tokens=25, n_samples=25, batch_size=32,
-    output_dir=None
+    output_dir=None,
+    positions=None,   # if None, search all positions [-5..-1]
 ):
     """
     Two-stage judge-based grid search over (layer, position, coeff) for allex.
@@ -700,7 +709,8 @@ def run_allex_grid_search(
     if grid_coeffs is None:
         grid_coeffs = [25, 50, 75, 100, 150, 200, 250, 300]
 
-    positions = list(range(-5, 0))
+    if positions is None:
+        positions = list(range(-5, 0))
     layer_indices = sorted(all_layer_directions.keys())
 
     harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
@@ -1154,7 +1164,18 @@ def run_pipeline(args):
     # ------------------------------------------------------------------
     # Config
     # ------------------------------------------------------------------
-    mode_alias = f"layer{args.layer}" if mode == "layer_all" else mode
+    if mode == "layer_all":
+        mode_alias = f"layer{args.layer}"
+    elif mode == "allex":
+        mode_alias = "allex"
+        if args.layer is not None:
+            mode_alias = f"{mode_alias}_L{args.layer}"
+        if args.position is not None:
+            mode_alias = f"{mode_alias}_P{args.position}"
+    else:
+        mode_alias = mode
+    if args.use_topk_diffs:
+        mode_alias = f"{mode_alias}_topk"
     config_kwargs = {
         "model_alias": f"{base_model_name}/expert_steering_{mode_alias}/sys_prompt_{args.system_prompt}",
         "model_path": args.model_path,
@@ -1292,11 +1313,21 @@ def run_pipeline(args):
         print("="*80)
         print(f"  Cache: {shared_cache_dir}/layer_{{L}}.pt")
 
+        # Determine which layers to load — all MoE layers, or just args.layer
+        if args.layer is not None:
+            if not model_card.is_moe_layer(args.layer):
+                print(f"ERROR: layer {args.layer} is not a MoE layer")
+                sys.exit(1)
+            allex_layers = [args.layer]
+        else:
+            allex_layers = [i for i in range(model_card.get_num_layers())
+                            if model_card.is_moe_layer(i)]
+
+        # Determine which positions to search — all, or just args.position
+        allex_positions = [args.position] if args.position is not None else None  # None → default in grid search
+
         all_layer_directions = {}
-        num_layers = model_card.get_num_layers()
-        for layer_idx in range(num_layers):
-            if not model_card.is_moe_layer(layer_idx):
-                continue
+        for layer_idx in allex_layers:
             n_experts = model_card.get_num_experts(layer_idx)
             layer_cache = _load_or_compute_layer_directions(
                 layer_idx=layer_idx,
@@ -1313,7 +1344,11 @@ def run_pipeline(args):
                 [layer_cache[eid] for eid in range(n_experts)], dim=0
             )
 
-        print(f"\n  Loaded/computed directions for {len(all_layer_directions)} MoE layers")
+        print(f"\n  Loaded/computed directions for {len(all_layer_directions)} MoE layer(s)")
+        if args.layer is not None:
+            print(f"  (constrained to layer {args.layer})")
+        if allex_positions is not None:
+            print(f"  (constrained to position {args.position})")
 
         print("\n" + "="*80)
         print("ALLEX GRID SEARCH (LAYER x POSITION x COEFF)")
@@ -1332,7 +1367,8 @@ def run_pipeline(args):
             max_new_tokens=args.judge_grid_tokens,
             n_samples=args.judge_grid_n_samples,
             batch_size=args.batch_size,
-            output_dir=grid_output_dir
+            output_dir=grid_output_dir,
+            positions=allex_positions,
         )
 
         with open(os.path.join(grid_output_dir, "allex_grid_results.json"), 'w') as f:
@@ -1376,7 +1412,12 @@ def run_pipeline(args):
     print("="*80)
 
     expert_diffs_filename = model_card.get_expert_diffs_filename()
-    expert_diffs_dir = f"expert_diffs/sys_prompt_{cfg.system_prompt}"
+    if args.use_topk_diffs:
+        expert_diffs_dir = f"expert_diffs_topk/sys_prompt_{cfg.system_prompt}"
+        expert_diffs_filename = expert_diffs_filename.replace('.json', '_topk.json')
+        print(f"Expert diffs: TOP-K (k={model_card.get_routing_top_k()}) from {expert_diffs_dir}/")
+    else:
+        expert_diffs_dir = f"expert_diffs/sys_prompt_{cfg.system_prompt}"
     expert_diffs_path = os.path.join(expert_diffs_dir, expert_diffs_filename)
 
     if mode in ("by_name", "by_name_pos"):
@@ -1399,7 +1440,8 @@ def run_pipeline(args):
                 harmful_dataset_path="dataset/splits/harmful_train.json",
                 harmless_dataset_path="dataset/splits/harmless_train.json",
                 output_path=expert_diffs_path,
-                batch_size=args.batch_size
+                batch_size=args.batch_size,
+                use_top_k=args.use_topk_diffs,
             )
             print(f"Expert diffs saved to {expert_diffs_path}")
 
