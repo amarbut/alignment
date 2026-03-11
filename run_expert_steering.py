@@ -426,7 +426,8 @@ def run_grid_search(
     model_base, model_card, expert_data, candidate_experts, expert_ranks,
     harmful_val, harmless_val,
     grid_coeffs, max_new_tokens=25, n_samples=25, batch_size=32,
-    output_dir=None
+    output_dir=None,
+    positions=None,   # if None, search all positions [-5..-1]
 ):
     """
     Two-stage judge-based grid search over (expert, position, coeff).
@@ -451,7 +452,8 @@ def run_grid_search(
     from tqdm import tqdm
     import math
 
-    positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
+    if positions is None:
+        positions = list(range(-5, 0))  # [-5, -4, -3, -2, -1]
 
     # harmful_val contains dicts; extract instructions for refusal score stage
     harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
@@ -1125,6 +1127,8 @@ def run_pipeline(args):
         mode = "by_name_pos"
     elif args.layer is not None and args.expert is not None:
         mode = "by_name"
+    elif args.layer is not None and args.position is not None:
+        mode = "layer_pos"
     elif args.layer is not None:
         mode = "layer_all"
     elif args.expert_rank is not None:
@@ -1149,6 +1153,8 @@ def run_pipeline(args):
         print(f"Mode: RANK GRID           (top {args.expert_rank} experts by diff rank)")
     elif mode == "layer_all":
         print(f"Mode: LAYER GRID          (L{args.layer}, all experts, grid over experts x positions x coeffs)")
+    elif mode == "layer_pos":
+        print(f"Mode: LAYER+POS GRID      (L{args.layer} pos={args.position}, all experts, grid over experts x coeffs)")
     elif mode == "by_name":
         print(f"Mode: BY NAME GRID        (L{args.layer} E{args.expert}, grid over positions x coeffs)")
     elif mode == "by_name_pos":
@@ -1166,6 +1172,8 @@ def run_pipeline(args):
     # ------------------------------------------------------------------
     if mode == "layer_all":
         mode_alias = f"layer{args.layer}"
+    elif mode == "layer_pos":
+        mode_alias = f"layer{args.layer}_P{args.position}"
     elif mode == "allex":
         mode_alias = "allex"
         if args.layer is not None:
@@ -1425,12 +1433,13 @@ def run_pipeline(args):
         candidate_experts = [(args.layer, args.expert, 0.0)]
         expert_ranks = [1]
         print(f"  Named expert: L{args.layer} E{args.expert} (diff_pct unknown; 0.0 placeholder)")
-    elif mode == "layer_all":
-        # Mode 6: all experts in a specific layer — enumerate from model card
+    elif mode in ("layer_all", "layer_pos"):
+        # layer_all (mode 6) / layer_pos: all experts in a specific layer
         n_experts = model_card.get_num_experts(args.layer)
         candidate_experts = [(args.layer, eid, 0.0) for eid in range(n_experts)]
         expert_ranks = list(range(1, n_experts + 1))
-        print(f"\nMode 6: Layer {args.layer}, {n_experts} experts (diff_pct placeholder 0.0)")
+        pos_note = f", position fixed at {args.position}" if mode == "layer_pos" else ", all positions"
+        print(f"\nLayer mode: Layer {args.layer}, {n_experts} experts{pos_note} (diff_pct placeholder 0.0)")
     else:
         # Modes 1 & 3: load or generate expert diffs
         if not os.path.exists(expert_diffs_path):
@@ -1505,202 +1514,17 @@ def run_pipeline(args):
             expert_data[rank] = layer_cache[expert_id]
 
     # ------------------------------------------------------------------
-    # Mode 5: BY NAME+POS — grid over coeffs only (position fixed)
-    # ------------------------------------------------------------------
-    if mode == "by_name_pos":
-        layer, expert_id, diff_pct = candidate_experts[0]
-        mean_diff = expert_data[1]
-        position = args.position
-
-        print("\n" + "="*80)
-        print(f"MODE 5: COEFF GRID (L{layer} E{expert_id}, position={position})")
-        print("="*80)
-
-        # Use run_grid_search with a single (rank=1, position=fixed) entry
-        # We build a mini candidate_experts list with position baked in.
-        # We'll call a simplified single-position grid.
-
-        print(f"  Grid over {len(args.grid_coeffs)} coeffs (position fixed at {position})")
-        print(f"  Coeffs: {args.grid_coeffs}")
-
-        harmful_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmful_val]
-        harmless_val_instructions = [x['instruction'] if isinstance(x, dict) else x for x in harmless_val]
-
-        if hasattr(model_card, 'get_expert_steering_thresholds'):
-            kl_threshold = model_card.get_expert_steering_thresholds().get('kl_threshold', 1.0)
-        else:
-            kl_threshold = 1.0
-
-        from tqdm import tqdm
-        import math
-
-        sample = harmful_val[:args.judge_grid_n_samples]
-        direction = mean_diff[position].to(model_base.model.device, dtype=model_base.model.dtype)
-        mlp_module = model_card.get_mlp_module(layer)
-
-        baseline_scores = get_refusal_scores(
-            model_base.model, harmful_val_instructions,
-            model_base.tokenize_instructions_fn, model_base.refusal_toks,
-            fwd_hooks=[], batch_size=args.batch_size,
-            tokenizer=model_base.tokenizer,
-            refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
-        )
-        baseline_mean = baseline_scores.mean().item()
-        print(f"  Baseline refusal score: {baseline_mean:.4f}")
-
-        print(f"  Collecting baseline harmless logits...")
-        baseline_harmless_logits = get_last_position_logits(
-            model=model_base.model,
-            tokenizer=model_base.tokenizer,
-            instructions=harmless_val_instructions,
-            tokenize_instructions_fn=model_base.tokenize_instructions_fn,
-            fwd_pre_hooks=[],
-            fwd_hooks=[],
-            batch_size=args.batch_size
-        )
-
-        stage1_results = []
-        with tqdm(total=len(args.grid_coeffs), desc="  Coeff sweep") as pbar:
-            for coeff in args.grid_coeffs:
-                hook_fn = get_expert_weighted_activation_addition_hook(
-                    direction=direction,
-                    expert_id=expert_id,
-                    coeff=-coeff,
-                    model_card=model_card
-                )
-                fwd_hooks = [(mlp_module, hook_fn)]
-
-                scores = get_refusal_scores(
-                    model_base.model, harmful_val_instructions,
-                    model_base.tokenize_instructions_fn, model_base.refusal_toks,
-                    fwd_hooks=fwd_hooks, batch_size=args.batch_size,
-                    tokenizer=model_base.tokenizer,
-                    refusal_score_suffix_toks=model_base.refusal_score_suffix_toks
-                )
-                mean_score = scores.mean().item()
-
-                intervention_logits = get_last_position_logits(
-                    model=model_base.model,
-                    tokenizer=model_base.tokenizer,
-                    instructions=harmless_val_instructions,
-                    tokenize_instructions_fn=model_base.tokenize_instructions_fn,
-                    fwd_pre_hooks=[],
-                    fwd_hooks=fwd_hooks,
-                    batch_size=args.batch_size
-                )
-                kl_div = kl_div_fn(
-                    baseline_harmless_logits, intervention_logits, mask=None
-                ).mean(dim=0).item()
-                passed_kl = kl_div <= kl_threshold
-
-                stage1_results.append({
-                    "rank": 1,
-                    "layer": layer,
-                    "expert_id": expert_id,
-                    "diff_pct": diff_pct,
-                    "position": position,
-                    "coeff": coeff,
-                    "refusal_score": mean_score,
-                    "refusal_reduction": baseline_mean - mean_score,
-                    "kl_div": kl_div,
-                    "passed_kl": passed_kl,
-                })
-                pbar.update(1)
-                pbar.set_postfix_str(f"score={mean_score:.3f} kl={kl_div:.3f}{'✓' if passed_kl else '✗'}")
-
-        passing = [r for r in stage1_results if r["passed_kl"]]
-        passing.sort(key=lambda x: x["refusal_score"])
-        if not passing:
-            print(f"  WARNING: No combos passed KL filter. Using lowest-KL coeff.")
-            stage1_results.sort(key=lambda x: x["kl_div"])
-            passing = stage1_results[:1]
-
-        n_judge = max(math.ceil(len(args.grid_coeffs) * 0.025), min(5, len(passing)))
-        candidates = passing[:n_judge]
-
-        print(f"\n  Stage 2: judging top {len(candidates)} coeff candidates...")
-
-        grid_output_dir = os.path.join(base_output_dir, f"mode5_L{layer}_E{expert_id}_pos{position}")
-        os.makedirs(grid_output_dir, exist_ok=True)
-        combos_dir = os.path.join(grid_output_dir, "combos")
-        os.makedirs(combos_dir, exist_ok=True)
-
-        best_asr = -1.0
-        best_coeff = None
-
-        for i, candidate in enumerate(candidates):
-            coeff = candidate["coeff"]
-            print(f"\n  [{i+1}/{len(candidates)}] coeff={coeff} (refusal={candidate['refusal_score']:.4f})")
-
-            fwd_pre_hooks, fwd_hooks = get_expert_weighted_intervention_hooks(
-                model_base,
-                layer_idx=layer,
-                expert_id=expert_id,
-                direction=direction,
-                coeff=-coeff
-            )
-
-            completions = model_base.generate_completions(
-                sample,
-                fwd_pre_hooks=fwd_pre_hooks,
-                fwd_hooks=fwd_hooks,
-                max_new_tokens=args.judge_grid_tokens,
-                batch_size=args.batch_size
-            )
-
-            eval_path = os.path.join(combos_dir, f"L{layer}_E{expert_id}_pos{position}_c{coeff}_eval.json")
-            evaluation = evaluate_jailbreak(
-                completions=completions,
-                methodologies=["openai"],
-                evaluation_path=eval_path,
-                openai_delay=0.1
-            )
-
-            asr = evaluation.get("openai_success_rate", 0.0)
-            counts = evaluation.get("openai_overall_counts", {})
-            print(f"    ASR={asr:.2%} (full={counts.get('full_response',0)}, "
-                  f"refusal={counts.get('refusal',0)}, non_response={counts.get('non_response',0)})")
-
-            candidate.update({"asr": asr, **{k: counts.get(k, 0)
-                                              for k in ["full_response", "refusal", "non_response"]}})
-
-            if asr > best_asr:
-                best_asr = asr
-                best_coeff = coeff
-
-        all_results = sorted(candidates, key=lambda x: -x.get("asr", -1)) + \
-                      [r for r in stage1_results if r not in candidates]
-
-        with open(os.path.join(grid_output_dir, "coeff_grid_results.json"), 'w') as f:
-            json.dump({
-                "best_layer": layer, "best_expert_id": expert_id,
-                "best_position": position, "best_coeff": best_coeff,
-                "results": all_results
-            }, f, indent=2)
-
-        if best_coeff is not None:
-            print(f"\n  Best: coeff={best_coeff}, ASR={best_asr:.2%}")
-            run_single_experiment(
-                args=args, cfg=cfg, model_base=model_base,
-                expert_entry=(layer, expert_id, diff_pct), rank=1,
-                mean_diff=mean_diff, position=position,
-                harmful_test=harmful_test, harmless_test=harmless_test,
-                base_output_dir=os.path.join(base_output_dir, f"mode5_L{layer}_E{expert_id}_pos{position}_c{best_coeff}"),
-                coeff_override=best_coeff
-            )
-
-        print("\n" + "="*80)
-        print("PIPELINE COMPLETE")
-        print("="*80)
-        print(f"Results saved under: {base_output_dir}")
-        return
-
-    # ------------------------------------------------------------------
-    # Modes 1, 3, 4, 6: run_grid_search (judge grid over experts x positions x coeffs)
+    # Modes 1, 3, 4, 5, 6, layer_pos: run_grid_search
     # ------------------------------------------------------------------
     print("\n" + "="*80)
     print("JUDGE GRID SEARCH")
     print("="*80)
+
+    # Modes with a fixed position search only that one; others search all 5
+    if mode in ("by_name_pos", "layer_pos"):
+        grid_positions = [args.position]
+    else:
+        grid_positions = None  # run_grid_search defaults to all positions
 
     grid_output_dir = os.path.join(base_output_dir, "judge_grid_search")
     os.makedirs(grid_output_dir, exist_ok=True)
@@ -1717,7 +1541,8 @@ def run_pipeline(args):
         max_new_tokens=args.judge_grid_tokens,
         n_samples=args.judge_grid_n_samples,
         batch_size=args.batch_size,
-        output_dir=grid_output_dir
+        output_dir=grid_output_dir,
+        positions=grid_positions,
     )
 
     best_layer, best_expert_id, best_diff_pct = candidate_experts[best_rank - 1]
