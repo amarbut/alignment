@@ -142,6 +142,14 @@ class ModelCard(ABC):
         except (IndexError, ValueError):
             raise ValueError(f"Cannot parse top-k from routing mode string: {mode!r}")
 
+    def get_norm_topk_prob(self) -> bool:
+        """
+        Return whether routing weights are renormalized after top-k selection.
+        Reads norm_topk_prob from model config if present; defaults to False.
+        Override in subclass if the model uses a non-standard config attribute.
+        """
+        return getattr(self.model_base.model.config, 'norm_topk_prob', False)
+
     # === Concrete Methods (Use Pre-Detected Format) ===
 
     def parse_mlp_output(self, output) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:

@@ -338,19 +338,29 @@ def get_expert_unweighted_intervention_hooks(
 def get_all_expert_weighted_activation_addition_hook(
     directions_for_layer: Float[Tensor, "n_experts d_model"],
     coeff: float = 1.0,
-    model_card: Optional["ModelCard"] = None
+    model_card: Optional["ModelCard"] = None,
+    use_top_k: bool = False,
+    norm_topk_prob: bool = False,
 ):
     """
-    Create hook that applies weighted sum of ALL expert steering vectors.
+    Create hook that applies weighted sum of expert steering vectors.
 
     For each token, reads router probabilities and computes:
         modification = router_probs @ directions_for_layer
     Then adds coeff * modification to MLP output.
 
+    By default uses full softmax probabilities over all experts (allex).
+    With use_top_k=True, zeroes out non-top-k experts before weighting,
+    matching the model's actual routing behaviour. norm_topk_prob controls
+    whether the surviving weights are renormalised to sum to 1 (should match
+    the model's own norm_topk_prob config setting).
+
     Args:
         directions_for_layer: Steering directions for all experts [n_experts, d_model]
         coeff: Coefficient for steering strength
-        model_card: Optional ModelCard for output parsing
+        model_card: Optional ModelCard for output parsing and top-k lookup
+        use_top_k: If True, restrict to top-k experts per token
+        norm_topk_prob: If True, renormalise top-k weights to sum to 1
 
     Returns:
         Hook function
@@ -371,6 +381,14 @@ def get_all_expert_weighted_activation_addition_hook(
 
         # Get routing probabilities: [batch*seq, n_experts]
         router_probs = torch.nn.functional.softmax(router_logits, dim=-1)
+
+        if use_top_k and model_card is not None:
+            k = model_card.get_routing_top_k()
+            _, topk_idx = router_probs.topk(k, dim=-1)
+            mask = torch.zeros_like(router_probs).scatter_(-1, topk_idx, 1.0)
+            router_probs = router_probs * mask
+            if norm_topk_prob:
+                router_probs = router_probs / router_probs.sum(dim=-1, keepdim=True)
 
         # Compute weighted sum: [batch*seq, n_experts] @ [n_experts, d_model] -> [batch*seq, d_model]
         dirs = directions_for_layer.to(mlp_output.device, mlp_output.dtype)
@@ -396,7 +414,9 @@ def get_all_expert_weighted_intervention_hooks(
     layer_idx: int,
     directions_for_layer: Float[Tensor, "n_experts d_model"],
     coeff: float = 1.0,
-    model_card: Optional["ModelCard"] = None
+    model_card: Optional["ModelCard"] = None,
+    use_top_k: bool = False,
+    norm_topk_prob: bool = False,
 ) -> Tuple[list, list]:
     """
     Get hooks for all-expert weighted activation addition intervention.
@@ -407,6 +427,8 @@ def get_all_expert_weighted_intervention_hooks(
         directions_for_layer: Steering directions for all experts at this layer [n_experts, d_model]
         coeff: Coefficient (positive to enhance, negative to suppress)
         model_card: Optional ModelCard (created if not provided)
+        use_top_k: If True, restrict to top-k experts per token
+        norm_topk_prob: If True, renormalise top-k weights to sum to 1
 
     Returns:
         (fwd_pre_hooks, fwd_hooks) tuple
@@ -420,7 +442,9 @@ def get_all_expert_weighted_intervention_hooks(
     hook_fn = get_all_expert_weighted_activation_addition_hook(
         directions_for_layer=directions_for_layer,
         coeff=coeff,
-        model_card=model_card
+        model_card=model_card,
+        use_top_k=use_top_k,
+        norm_topk_prob=norm_topk_prob,
     )
 
     fwd_pre_hooks = []

@@ -162,6 +162,14 @@ def parse_arguments():
              'auto-scaled by k if --threshold is not set explicitly.'
     )
 
+    parser.add_argument(
+        '--allex_top_k',
+        action='store_true',
+        help='Allex mode only: restrict routing weights to top-k experts per token '
+             'instead of using full softmax probabilities. Renormalisation follows '
+             'each model\'s norm_topk_prob config setting.'
+    )
+
     # -------------------------------------------------------------------------
     # Grid search options
     # -------------------------------------------------------------------------
@@ -691,6 +699,8 @@ def run_allex_grid_search(
     max_new_tokens=25, n_samples=25, batch_size=32,
     output_dir=None,
     positions=None,   # if None, search all positions [-5..-1]
+    use_top_k=False,
+    norm_topk_prob=False,
 ):
     """
     Two-stage judge-based grid search over (layer, position, coeff) for allex.
@@ -775,7 +785,9 @@ def run_allex_grid_search(
                     hook = get_all_expert_weighted_activation_addition_hook(
                         directions_for_layer=dirs_at_pos,
                         coeff=-coeff,
-                        model_card=model_card
+                        model_card=model_card,
+                        use_top_k=use_top_k,
+                        norm_topk_prob=norm_topk_prob,
                     )
                     fwd_hooks = [(mlp_module, hook)]
 
@@ -860,7 +872,9 @@ def run_allex_grid_search(
             fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
                 model_base, layer_idx=layer_idx,
                 directions_for_layer=dirs_at_pos,
-                coeff=-coeff, model_card=model_card
+                coeff=-coeff, model_card=model_card,
+                use_top_k=use_top_k,
+                norm_topk_prob=norm_topk_prob,
             )
 
             completions = model_base.generate_completions(
@@ -1063,7 +1077,9 @@ def run_single_allex_experiment(
         fwd_pre_hooks, fwd_hooks = get_all_expert_weighted_intervention_hooks(
             model_base, layer_idx=best_layer,
             directions_for_layer=dirs_dev,
-            coeff=coeff_val, model_card=model_card
+            coeff=coeff_val, model_card=model_card,
+            use_top_k=args.allex_top_k,
+            norm_topk_prob=model_card.get_norm_topk_prob() if args.allex_top_k else False,
         )
 
         print(f"\nGenerating completions for {dataset_name} with {intervention_label}...")
@@ -1377,6 +1393,8 @@ def run_pipeline(args):
             batch_size=args.batch_size,
             output_dir=grid_output_dir,
             positions=allex_positions,
+            use_top_k=args.allex_top_k,
+            norm_topk_prob=model_card.get_norm_topk_prob() if args.allex_top_k else False,
         )
 
         with open(os.path.join(grid_output_dir, "allex_grid_results.json"), 'w') as f:
