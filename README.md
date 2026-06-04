@@ -18,7 +18,7 @@ Safety alignment in instruction-tuned LLMs depends on reliable refusal behavior.
 - Evidence of **two distinct refusal pathways**: FFN-mediated (internal) and attention-mediated (contextual)
 - Post-trained models show **behavioral entanglement** between refusal and adjacent behavioral dimensions, consistent with superposition
 
-We evaluate on three open-source MoE models: [Mixtral-8x7B-Instruct](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1), [OLMoE-1B-7B](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct), and [DeepSeek-MoE](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat).
+We evaluate on three open-source MoE models: [Mixtral-8x7B-Instruct](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1), [OLMoE-1B-7B](https://huggingface.co/allenai/OLMoE-1B-7B-0924-Instruct), and [GPT-OSS 20B](https://huggingface.co/unsloth/gpt-oss-20b-unsloth-bnb-4bit).
 
 ## Repository Structure
 
@@ -56,7 +56,7 @@ dataset/
 |---|---|
 | Mixtral-8x7B-Instruct | `mistralai/Mixtral-8x7B-Instruct-v0.1` |
 | OLMoE-1B-7B-Instruct | `allenai/OLMoE-1B-7B-0924-Instruct` |
-| DeepSeek-MoE | `deepseek-ai/deepseek-moe-16b-chat` |
+| GPT-OSS 20B (4bit) | `unsloth/gpt-oss-20b-unsloth-bnb-4bit` |
 
 ## Quickstart
 
