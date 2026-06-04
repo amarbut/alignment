@@ -1,9 +1,16 @@
 """
 Simplified Arditi Refusal Direction Pipeline
-    - Activation-addition only
-    - Modified refusal score
-    - Addition of OpenAI Judge
-    - No native coherence testing
+
+Based substantially on andyrdt/refusal_direction (https://github.com/andyrdt/refusal_direction).
+Original work: Arditi et al. (2024), "Refusal in Language Models Is Mediated by a Single Direction."
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Modifications from the original:
+    - Activation-addition steering only (ablation removed)
+    - Modified refusal scoring metric
+    - Added OpenAI judge evaluation
+    - Removed native coherence testing
+    - Adapted to use ModelBase/ModelCard abstraction for MoE-compatible model loading
 """
 
 # =============================================================================

@@ -114,6 +114,18 @@ pandas
 
 For OpenAI-based jailbreak evaluation: `openai` (requires API key in `OPENAI_API_KEY`).
 
+## Attribution
+
+This repository builds substantially on the refusal steering codebase of Arditi et al. (2024):
+
+> Arditi, A., Obeso, O., Syed, A., Paleka, D., Rimsky, N., Gurnee, W., & Nanda, N. (2024).
+> "Refusal in Language Models Is Mediated by a Single Direction." NeurIPS 2024.
+> https://github.com/andyrdt/refusal_direction (Apache 2.0)
+
+The files in `submodules/arditi/` and `run_pipeline_arditi.py` are adapted from that repo with minor modifications. The expert-aware steering infrastructure (`submodules/expert_steering/`, `run_expert_steering.py`) extends their activation-addition hook pattern for MoE architectures. See `NOTICE` for a full breakdown of derived vs. original files.
+
+This repository is licensed under the Apache License, Version 2.0 (see `LICENSE`).
+
 ## Citation
 
 ```bibtex

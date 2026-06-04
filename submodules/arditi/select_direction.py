@@ -1,3 +1,8 @@
+# Adapted from andyrdt/refusal_direction (https://github.com/andyrdt/refusal_direction)
+# Original work: Arditi et al. (2024), "Refusal in Language Models Is Mediated by a Single Direction"
+# Licensed under the Apache License, Version 2.0 (see LICENSE)
+# Modifications: added KL-divergence filtering, layer pruning options, and MoE-compatible evaluation.
+
 import json
 import torch
 import functools

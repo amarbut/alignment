@@ -1,0 +1,40 @@
+Expert-Aware Refusal Steering
+Copyright 2026 Anna C. Marbut
+
+This repository contains code derived from and substantially based on:
+
+    andyrdt/refusal_direction
+    https://github.com/andyrdt/refusal_direction
+    Copyright (c) Andy Arditi et al.
+    Licensed under the Apache License, Version 2.0
+
+The original work is described in:
+
+    Arditi, A., Obeso, O., Syed, A., Paleka, D., Rimsky, N., Gurnee, W., & Nanda, N. (2024).
+    "Refusal in Language Models Is Mediated by a Single Direction."
+    Advances in Neural Information Processing Systems (NeurIPS 2024).
+    https://arxiv.org/abs/2406.11717
+
+Files derived from andyrdt/refusal_direction with minimal modification:
+    submodules/arditi/hook_utils.py
+    submodules/arditi/generate_directions.py
+    submodules/arditi/select_direction.py
+    run_pipeline_arditi.py (modified to add OpenAI judge evaluation and
+        remove native coherence testing; core direction extraction and
+        activation addition logic is from the original)
+
+Files that extend or adapt the Arditi approach for MoE architectures
+(substantially modified; original structure and hook pattern adapted):
+    submodules/expert_steering/expert_intervention.py
+    submodules/evaluate_jailbreak.py
+    model_utils/ (model loading and card abstraction pattern)
+    run_expert_steering.py
+    run_expert_routing.py
+
+Original novel contributions (not derived from andyrdt/refusal_direction):
+    submodules/expert_steering/expert_selection.py
+    submodules/expert_steering/expert_specific_activations.py
+    submodules/expert_routing/expert_routing_hooks.py
+    submodules/expert_diff_generator.py
+    config.py
+    additional_experiments/

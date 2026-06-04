@@ -1,11 +1,13 @@
 """
 Expert-specific intervention via weighted activation addition.
 
-Implements activation addition where the steering direction is weighted
-by the target expert's routing weight, making it mathematically equivalent
-to adding the direction to the individual expert's output.
+Extends the activation addition approach of Arditi et al. (2024) to MoE
+architectures. Steering directions are weighted by expert routing weights,
+making the intervention mathematically equivalent to adding the direction
+to an individual expert's output.
 
-Refactored to use ModelCard abstraction for model-agnostic MoE access.
+Hook pattern adapted from andyrdt/refusal_direction (Apache 2.0);
+expert-weighting logic and MoE-specific implementation are original.
 """
 
 import torch

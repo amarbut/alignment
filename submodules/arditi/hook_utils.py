@@ -1,3 +1,7 @@
+# Adapted from andyrdt/refusal_direction (https://github.com/andyrdt/refusal_direction)
+# Original work: Arditi et al. (2024), "Refusal in Language Models Is Mediated by a Single Direction"
+# Licensed under the Apache License, Version 2.0 (see LICENSE)
+# No substantive modifications to core hook logic.
 
 import torch
 import contextlib
