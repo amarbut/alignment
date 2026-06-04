@@ -16,6 +16,7 @@ The original work is described in:
     https://arxiv.org/abs/2406.11717
 
 Files derived from andyrdt/refusal_direction with minimal modification:
+    dataset/
     submodules/arditi/hook_utils.py
     submodules/arditi/generate_directions.py
     submodules/arditi/select_direction.py

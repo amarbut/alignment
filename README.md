@@ -23,31 +23,29 @@ We evaluate on three open-source MoE models: [Mixtral-8x7B-Instruct](https://hug
 ## Repository Structure
 
 ```
-config.py                   Experiment configuration dataclass
-run_expert_steering.py      Expert-specific steering experiments (6 modes; see docstring)
-run_expert_routing.py       Expert routing pattern analysis
-run_pipeline_arditi.py      Baseline Arditi (dense) steering pipeline
+config.py                         Experiment configuration dataclass
+run_expert_steering.py            Expert-specific steering experiments (6 modes; see docstring)
+run_expert_routing.py             Expert routing pattern analysis
+run_pipeline_arditi.py            Baseline Arditi (dense) steering pipeline
 
-model_utils/                Model loading and MoE model cards for each supported architecture
+model_utils/                      Model loading and MoE model cards for each supported architecture
 submodules/
-  arditi/                   Arditi refusal direction generation and hook utilities
-  expert_steering/          Expert-specific steering: direction selection and intervention
-  expert_routing/           Expert routing hooks and analysis
-  evaluate_jailbreak.py     Jailbreak evaluation (substring matching + OpenAI judge)
-  expert_diff_generator.py  Generate expert routing difference vectors
+  arditi/                         Arditi refusal direction generation and hook utilities
+  expert_steering/                Expert-specific steering: direction selection and intervention
+  expert_routing/                 Expert routing hooks and analysis
+  evaluate_jailbreak.py           Jailbreak evaluation (substring matching + OpenAI judge)
+  expert_diff_generator.py        Generate expert routing difference vectors
 
-additional_experiments/     Supporting experiments
-  run_benchmarks.py         Run standard safety benchmarks
+additional_experiments/           Supporting experiments
+  run_benchmarks.py               Run standard safety benchmarks
   run_ablation_random_experts.py  Random expert ablation study
-  run_expert_diffs.py       Expert difference analysis
-  run_multi_expert_steering.py  Multi-expert steering experiments
-
-compile_results.py          Aggregate and display results across runs
+  run_expert_diffs.py             Expert difference analysis
+  run_multi_expert_steering.py    Multi-expert steering experiments
 
 dataset/
-  raw/                      Original benchmark data (AdvBench, HarmBench, JailbreakBench, etc.)
-  processed/                Pre-processed evaluation sets
-  load_dataset.py           Dataset loading utilities
+  raw/                            Original benchmark data (AdvBench, HarmBench, JailbreakBench, etc.)
+  processed/                      Pre-processed evaluation sets
+  load_dataset.py                 Dataset loading utilities
 ```
 
 ## Supported Models
