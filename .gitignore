@@ -1,0 +1,26 @@
+# Experiment outputs (reproducible from code)
+runs/
+expert_diffs/
+arditi_directions/
+expert_routing_analysis/
+
+# Python artifacts
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Local working directories (exploratory, not part of the paper)
+activation_explore/
+defunct/
+expert_explore/
+pipeline/
+refusal_steering/
+
+# Cluster outputs
+*.out
+*.err
+*.slurm
+
+# Editor artifacts
+*.swp
+.Rhistory
