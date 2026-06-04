@@ -3,6 +3,8 @@ runs/
 expert_diffs/
 arditi_directions/
 expert_routing_analysis/
+package_for_transfer.py
+compile_results.py
 
 # Python artifacts
 __pycache__/
