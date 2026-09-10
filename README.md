@@ -4,7 +4,6 @@ Code for the paper:
 
 > **Expert-Aware Refusal Steering**  
 > Anna C. Marbut, Travis J. Wheeler, Daniel R. Olson  
-> *Preprint under review, Conference on Language Modeling (COLM 2026)*  
 > [Preprint PDF](https://amarbut.github.io/files/MoE_Steering_COLM_preprint.pdf)
 
 ## Overview
